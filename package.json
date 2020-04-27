@@ -1,0 +1,19 @@
+{
+  "name": "rust-learning-parser-combinators",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "watch_fmt_test": "cargo watch -x test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Swiftaff/rust-learning-parser-combinators.git"
+  },
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Swiftaff/rust-learning-parser-combinators/issues"
+  },
+  "homepage": "https://github.com/Swiftaff/rust-learning-parser-combinators#readme"
+}

@@ -18,3 +18,14 @@ fn match_literal(expected: &'static str) -> impl Fn(&str) -> Result<(&str, ()), 
         _ => Err(input),
     }
 }
+
+#[test]
+fn test_literal_parser() {
+    let parse_joe = match_literal("Hello Joe!");
+    assert_eq!(parse_joe("Hello Joe!"), Ok(("", ())));
+    assert_eq!(
+        parse_joe("Hello Joe! Hello Robert!"),
+        Ok((" Hello Robert!", ()))
+    );
+    assert_eq!(parse_joe("Hello Mike!"), Err("Hello Mike!"));
+}
