@@ -341,10 +341,12 @@ parent_element
 whitespace_wrap
 */
 
+#[derive(Debug, Clone)]
 struct Testparser {
     input_original: String,
     input_remaining: String,
     output: String,
+    chomp: String,
     isError: bool,
 }
 
@@ -353,6 +355,7 @@ impl Testparser {
         Testparser {
             input_original: inputString.to_string(),
             input_remaining: inputString.to_string(),
+            chomp: "".to_string(),
             output: "".to_string(),
             isError: false,
         }
@@ -361,9 +364,28 @@ impl Testparser {
     fn word(self: Testparser, expected: &str) -> Testparser {
         match self.input_remaining.get(0..expected.len()) {
             Some(next) if next == expected => {
-                let mut newParser = self;
+                let mut newParser = self.clone();
                 newParser.input_remaining = newParser.input_remaining[expected.len()..].to_string();
-                newParser.output += "word2";
+                newParser.output += "word";
+                newParser.chomp += next;
+                newParser
+            }
+            _ => {
+                let mut newParser = self;
+                newParser.isError = true;
+                newParser
+            }
+        }
+    }
+
+    fn char(self: Testparser) -> Testparser {
+        match self.input_remaining.chars().next() {
+            Some(next) => {
+                let mut newParser = self;
+                newParser.input_remaining =
+                    newParser.input_remaining[next.len_utf8()..].to_string();
+                newParser.output += "char";
+                newParser.chomp += next.encode_utf8(&mut [0; 1]);
                 newParser
             }
             _ => {
@@ -378,12 +400,34 @@ impl Testparser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
+
+    #[test]
+    fn test_char() {
+        let testparser = Testparser::new("Testing 123");
+        let result = testparser.clone().char().char().char().char();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "ing 123");
+        assert_eq!(result.output, "charcharcharchar");
+        assert_eq!(result.chomp, "Test");
+        assert_eq!(result.isError, false);
+    }
+
     #[test]
     fn test_word() {
         let testparser = Testparser::new("Testing 123");
-        let result = testparser.word("Test").word("ing").word(" ").word("123");
-        assert_eq!(result.output, "word2word2word2word2");
+        let result = testparser
+            .clone()
+            .word("Test")
+            .word("ing")
+            .word(" ")
+            .word("123");
+        assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output, "wordwordwordword");
+        assert_eq!(result.chomp, "Testing 123");
+        assert_eq!(result.isError, false);
     }
 
     #[test]
