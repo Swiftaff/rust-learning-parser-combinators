@@ -311,9 +311,81 @@ where
     right(space0(), left(parser, space0()))
 }
 
+/*
+map?
+pred?
+and_then?
+parse
+the_letter_a
+match_literal
+identifier
+pair
+left
+right
+one_or_more
+zero_or_more
+any_char
+whitespace_char
+space_one_or_more
+space_zero_or_more
+quoted_string
+attribute_pair
+attributes
+element_start
+single_element
+open_element
+either
+element
+close_element
+parent_element
+whitespace_wrap
+*/
+
+struct Testparser {
+    input_original: String,
+    input_remaining: String,
+    output: String,
+    isError: bool,
+}
+
+impl Testparser {
+    fn new(inputString: &str) -> Testparser {
+        Testparser {
+            input_original: inputString.to_string(),
+            input_remaining: inputString.to_string(),
+            output: "".to_string(),
+            isError: false,
+        }
+    }
+
+    fn word(self: Testparser, expected: &str) -> Testparser {
+        match self.input_remaining.get(0..expected.len()) {
+            Some(next) if next == expected => {
+                let mut newParser = self;
+                newParser.input_remaining = newParser.input_remaining[expected.len()..].to_string();
+                newParser.output += "word2";
+                newParser
+            }
+            _ => {
+                let mut newParser = self;
+                newParser.isError = true;
+                newParser
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_word() {
+        let testparser = Testparser::new("Testing 123");
+        let result = testparser.word("Test").word("ing").word(" ").word("123");
+        assert_eq!(result.output, "word2word2word2word2");
+        assert_eq!(result.input_remaining, "");
+    }
+
     #[test]
     fn test_literal_parser() {
         let parse_joe = match_literal("Hello Joe!");
