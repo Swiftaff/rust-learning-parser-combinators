@@ -1,5 +1,5 @@
 #![type_length_limit = "16777216"]
-
+use ::std::rc::Rc;
 struct BoxedParser<'a, Output> {
     parser: Box<dyn Parser<'a, Output> + 'a>,
 }
@@ -395,6 +395,40 @@ impl Testparser {
             }
         }
     }
+
+    fn digit(self: Testparser) -> Testparser {
+        match self.input_remaining.chars().next() {
+            Some(next) if next.is_digit(10) => {
+                let mut newParser = self;
+                newParser.input_remaining =
+                    newParser.input_remaining[next.len_utf8()..].to_string();
+                newParser.output += "digit";
+                newParser.chomp += next.encode_utf8(&mut [0; 1]);
+                newParser
+            }
+            _ => {
+                let mut newParser = self;
+                newParser.isError = true;
+                newParser
+            }
+        }
+    }
+
+    fn combinator_one_or_more(self: Testparser, funcNames: &Vec<ParserName>) -> Testparser {
+        let mut newParser = self;
+        for funcName in funcNames.iter() {
+            match funcName {
+                Digit => newParser = newParser.digit(),
+            }
+        }
+        newParser
+    }
+}
+
+type TestparserFunction<S> = Rc<Fn(S) -> S>;
+
+enum ParserName {
+    Digit,
 }
 
 #[cfg(test)]
@@ -404,6 +438,43 @@ mod tests {
     //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
 
     #[test]
+    fn test_multiple_parsers() {
+        let testparser = Testparser::new("123Test");
+        let result = testparser
+            .clone()
+            .combinator_one_or_more(&vec![ParserName::Digit, ParserName::Digit])
+            .digit()
+            .word("Te");
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "st");
+        assert_eq!(result.output, "digitdigitdigitword");
+        assert_eq!(result.chomp, "123Te");
+        assert_eq!(result.isError, false);
+    }
+
+    #[test]
+    fn test_combinator_one_or_more() {
+        let testparser = Testparser::new("123Test");
+        let result = testparser
+            .clone()
+            .combinator_one_or_more(&vec![ParserName::Digit, ParserName::Digit]);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "3Test");
+        assert_eq!(result.output, "digitdigit");
+        assert_eq!(result.chomp, "12");
+        assert_eq!(result.isError, false);
+    }
+
+    fn test_digit() {
+        let testparser = Testparser::new("123Test");
+        let result = testparser.clone().digit().digit().digit();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "Test");
+        assert_eq!(result.output, "digitdigitdigit");
+        assert_eq!(result.chomp, "123");
+        assert_eq!(result.isError, false);
+    }
+
     fn test_char() {
         let testparser = Testparser::new("Testing 123");
         let result = testparser.clone().char().char().char().char();
