@@ -347,7 +347,7 @@ struct Testparser {
     input_remaining: String,
     output: String,
     chomp: String,
-    isError: bool,
+    success: bool,
 }
 
 impl Testparser {
@@ -357,7 +357,7 @@ impl Testparser {
             input_remaining: inputString.to_string(),
             chomp: "".to_string(),
             output: "".to_string(),
-            isError: false,
+            success: true,
         }
     }
 
@@ -368,11 +368,12 @@ impl Testparser {
                 newParser.input_remaining = newParser.input_remaining[expected.len()..].to_string();
                 newParser.output += "word";
                 newParser.chomp += next;
+                newParser.success = true;
                 newParser
             }
             _ => {
                 let mut newParser = self;
-                newParser.isError = true;
+                newParser.success = false;
                 newParser
             }
         }
@@ -386,11 +387,12 @@ impl Testparser {
                     newParser.input_remaining[next.len_utf8()..].to_string();
                 newParser.output += "char";
                 newParser.chomp += next.encode_utf8(&mut [0; 1]);
+                newParser.success = true;
                 newParser
             }
             _ => {
                 let mut newParser = self;
-                newParser.isError = true;
+                newParser.success = false;
                 newParser
             }
         }
@@ -404,33 +406,15 @@ impl Testparser {
                     newParser.input_remaining[next.len_utf8()..].to_string();
                 newParser.output += "digit";
                 newParser.chomp += next.encode_utf8(&mut [0; 1]);
+                newParser.success = true;
                 newParser
             }
             _ => {
                 let mut newParser = self;
-                newParser.isError = true;
+                newParser.success = false;
                 newParser
             }
         }
-    }
-
-    fn combinator_one_or_more(self: Testparser, funcNames: &Vec<ParserName>) -> Testparser {
-        //hm, too specific, not useful
-        let mut newParser = self;
-        for funcName in funcNames.iter() {
-            match funcName {
-                Digit => newParser = newParser.digit(),
-                Char => newParser = newParser.char(),
-            }
-        }
-        newParser
-    }
-
-    fn pass_fn_as_arg<F>(self: Testparser, func: F) -> Testparser
-    where
-        F: Fn(Testparser) -> Testparser,
-    {
-        func(self)
     }
 
     fn one_or_more_of<F>(self: Testparser, func: F) -> Testparser
@@ -439,13 +423,14 @@ impl Testparser {
     {
         let mut newParser = self;
         let chomp = newParser.clone().chomp;
-        while !newParser.isError {
+        while newParser.success {
             newParser = func(newParser)
         }
         if newParser.chomp == chomp {
+            newParser.success = false;
             newParser
         } else {
-            newParser.isError = false;
+            newParser.success = true;
             newParser
         }
     }
@@ -456,11 +441,10 @@ impl Testparser {
         F: Fn(Testparser) -> Testparser,
     {
         let mut newParser = self;
-        let chomp = newParser.clone().chomp;
-        while !newParser.isError {
+        while newParser.success {
             newParser = func(newParser)
         }
-        newParser.isError = false;
+        newParser.success = true;
         newParser
     }
 }
@@ -486,7 +470,7 @@ mod tests {
         assert_eq!(result.input_remaining, "a123Test");
         assert_eq!(result.output, "");
         assert_eq!(result.chomp, "");
-        assert_eq!(result.isError, false);
+        assert_eq!(result.success, true);
 
         testparser = Testparser::new("123Test");
         let result = testparser.clone().zero_or_more_of(Testparser::digit);
@@ -494,7 +478,7 @@ mod tests {
         assert_eq!(result.input_remaining, "Test");
         assert_eq!(result.output, "digitdigitdigit");
         assert_eq!(result.chomp, "123");
-        assert_eq!(result.isError, false);
+        assert_eq!(result.success, true);
     }
 
     fn test_one_or_more_of() {
@@ -504,7 +488,7 @@ mod tests {
         assert_eq!(result.input_remaining, "a123Test");
         assert_eq!(result.output, "");
         assert_eq!(result.chomp, "");
-        assert_eq!(result.isError, true);
+        assert_eq!(result.success, false);
 
         testparser = Testparser::new("123Test");
         let result = testparser.clone().one_or_more_of(Testparser::digit);
@@ -512,46 +496,18 @@ mod tests {
         assert_eq!(result.input_remaining, "Test");
         assert_eq!(result.output, "digitdigitdigit");
         assert_eq!(result.chomp, "123");
-        assert_eq!(result.isError, false);
-    }
-
-    #[test]
-    fn test_pass_fn_as_arg() {
-        let testparser = Testparser::new("123Test");
-        let result = testparser.clone().pass_fn_as_arg(Testparser::digit);
-        assert_eq!(result.input_original, testparser.input_original);
-        assert_eq!(result.input_remaining, "23Test");
-        assert_eq!(result.output, "digit");
-        assert_eq!(result.chomp, "1");
-        assert_eq!(result.isError, false);
+        assert_eq!(result.success, true);
     }
 
     #[test]
     fn test_multiple_parsers() {
-        let testparser = Testparser::new("123Test");
-        let result = testparser
-            .clone()
-            .combinator_one_or_more(&vec![ParserName::Digit, ParserName::Digit])
-            .digit()
-            .word("Te");
+        let testparser = Testparser::new("1Test");
+        let result = testparser.clone().digit().word("Te");
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "st");
-        assert_eq!(result.output, "digitdigitdigitword");
-        assert_eq!(result.chomp, "123Te");
-        assert_eq!(result.isError, false);
-    }
-
-    #[test]
-    fn test_combinator_one_or_more() {
-        let testparser = Testparser::new("123Test");
-        let result = testparser
-            .clone()
-            .combinator_one_or_more(&vec![ParserName::Digit, ParserName::Digit]);
-        assert_eq!(result.input_original, testparser.input_original);
-        assert_eq!(result.input_remaining, "3Test");
-        assert_eq!(result.output, "digitdigit");
-        assert_eq!(result.chomp, "12");
-        assert_eq!(result.isError, false);
+        assert_eq!(result.output, "digitword");
+        assert_eq!(result.chomp, "1Te");
+        assert_eq!(result.success, true);
     }
 
     fn test_digit() {
@@ -561,7 +517,7 @@ mod tests {
         assert_eq!(result.input_remaining, "Test");
         assert_eq!(result.output, "digitdigitdigit");
         assert_eq!(result.chomp, "123");
-        assert_eq!(result.isError, false);
+        assert_eq!(result.success, true);
     }
 
     fn test_char() {
@@ -571,7 +527,7 @@ mod tests {
         assert_eq!(result.input_remaining, "ing 123");
         assert_eq!(result.output, "charcharcharchar");
         assert_eq!(result.chomp, "Test");
-        assert_eq!(result.isError, false);
+        assert_eq!(result.success, true);
     }
 
     #[test]
@@ -587,7 +543,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output, "wordwordwordword");
         assert_eq!(result.chomp, "Testing 123");
-        assert_eq!(result.isError, false);
+        assert_eq!(result.success, true);
     }
 
     #[test]
