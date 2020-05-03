@@ -447,6 +447,24 @@ impl Testparser {
         newParser.success = true;
         newParser
     }
+
+    fn optional<F>(self: Testparser, func: F) -> Testparser
+    //always succeeds
+    where
+        F: Fn(Testparser) -> Testparser,
+    {
+        let mut newParser = self;
+        newParser = func(newParser);
+        newParser.success = true;
+        newParser
+    }
+
+    fn int(self: Testparser) -> Testparser {
+        let mut newParser = self
+            .optional(|s: Testparser| Testparser::word(s, "-"))
+            .one_or_more_of(Testparser::digit);
+        newParser
+    }
 }
 
 type TestparserFunction<S> = Rc<Fn(S) -> S>;
@@ -461,6 +479,64 @@ mod tests {
     use super::*;
 
     //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
+
+    #[test]
+    fn test_int() {
+        //not an int
+        let mut testparser = Testparser::new("a123");
+        let result = testparser.clone().int();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "a123");
+        assert_eq!(result.output, "");
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //positive small int
+        testparser = Testparser::new("12");
+        let result = testparser.clone().int();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output, "digitdigit");
+        assert_eq!(result.chomp, "12");
+        assert_eq!(result.success, true);
+
+        //positive large int
+        testparser = Testparser::new("123456");
+        let result = testparser.clone().int();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output, "digitdigitdigitdigitdigitdigit");
+        assert_eq!(result.chomp, "123456");
+        assert_eq!(result.success, true);
+
+        //negative int
+        testparser = Testparser::new("-123456");
+        let result = testparser.clone().int();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output, "worddigitdigitdigitdigitdigitdigit");
+        assert_eq!(result.chomp, "-123456");
+        assert_eq!(result.success, true);
+    }
+
+    #[test]
+    fn test_optional() {
+        let mut testparser = Testparser::new("a123Test");
+        let result = testparser.clone().optional(Testparser::char);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "123Test");
+        assert_eq!(result.output, "char");
+        assert_eq!(result.chomp, "a");
+        assert_eq!(result.success, true);
+
+        testparser = Testparser::new("a123Test");
+        let result = testparser.clone().zero_or_more_of(Testparser::digit);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "a123Test");
+        assert_eq!(result.output, "");
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+    }
 
     #[test]
     fn test_zero_or_more_of() {
