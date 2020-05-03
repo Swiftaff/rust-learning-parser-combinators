@@ -36,6 +36,7 @@ mod tests {
     struct TestparserElement {
         el_type: Option<TestparserElementType>,
         i64: Option<i64>,
+        float64: Option<f64>,
     }
 
     impl TestparserElement {
@@ -43,12 +44,14 @@ mod tests {
             TestparserElement {
                 el_type: None,
                 i64: None,
+                float64: None,
             }
         }
     }
     #[derive(Debug, Clone, PartialEq)]
     enum TestparserElementType {
         Int64,
+        Float64,
     }
     #[derive(Debug, Clone)]
     struct Testparser {
@@ -170,6 +173,79 @@ mod tests {
                 self
             }
         }
+
+        fn float(mut self: Testparser) -> Testparser {
+            self = self
+                .optional(|s: Testparser| Testparser::word(s, "-"))
+                .one_or_more_of(Testparser::digit)
+                .word(".")
+                .one_or_more_of(Testparser::digit);
+
+            if self.success {
+                let mut el = TestparserElement::new();
+                let val = self.clone().chomp.parse().unwrap();
+                el.el_type = Some(TestparserElementType::Float64);
+                el.float64 = Some(val);
+                self.output.push(el);
+                self
+            } else {
+                self
+            }
+        }
+    }
+
+    #[test]
+    fn test_float() {
+        //not an int
+        let mut testparser = Testparser::new("a123.456");
+        let result = testparser.clone().float();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "a123.456");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //positive small float
+        testparser = Testparser::new("12.34");
+        let result = testparser.clone().float();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Float64)
+        );
+        assert_eq!(result.output[0].float64, Some(12.34));
+        assert_eq!(result.chomp, "12.34");
+        assert_eq!(result.success, true);
+
+        //positive large float
+        testparser = Testparser::new("123456.78");
+        let result = testparser.clone().float();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Float64)
+        );
+        assert_eq!(result.output[0].float64, Some(123456.78));
+        assert_eq!(result.chomp, "123456.78");
+        assert_eq!(result.success, true);
+
+        //negative float
+        testparser = Testparser::new("-123456.78");
+        let result = testparser.clone().float();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Float64)
+        );
+        assert_eq!(result.output[0].float64, Some(-123456.78));
+        assert_eq!(result.chomp, "-123456.78");
+        assert_eq!(result.success, true);
     }
 
     #[test]
@@ -200,6 +276,8 @@ mod tests {
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Int64));
+        assert_eq!(result.output[0].i64, Some(123456));
         assert_eq!(result.chomp, "123456");
         assert_eq!(result.success, true);
 
@@ -209,6 +287,8 @@ mod tests {
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Int64));
+        assert_eq!(result.output[0].i64, Some(-123456));
         assert_eq!(result.chomp, "-123456");
         assert_eq!(result.success, true);
     }
