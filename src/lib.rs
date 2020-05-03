@@ -415,12 +415,52 @@ impl Testparser {
     }
 
     fn combinator_one_or_more(self: Testparser, funcNames: &Vec<ParserName>) -> Testparser {
+        //hm, too specific, not useful
         let mut newParser = self;
         for funcName in funcNames.iter() {
             match funcName {
                 Digit => newParser = newParser.digit(),
+                Char => newParser = newParser.char(),
             }
         }
+        newParser
+    }
+
+    fn pass_fn_as_arg<F>(self: Testparser, func: F) -> Testparser
+    where
+        F: Fn(Testparser) -> Testparser,
+    {
+        func(self)
+    }
+
+    fn one_or_more_of<F>(self: Testparser, func: F) -> Testparser
+    where
+        F: Fn(Testparser) -> Testparser,
+    {
+        let mut newParser = self;
+        let chomp = newParser.clone().chomp;
+        while !newParser.isError {
+            newParser = func(newParser)
+        }
+        if newParser.chomp == chomp {
+            newParser
+        } else {
+            newParser.isError = false;
+            newParser
+        }
+    }
+
+    fn zero_or_more_of<F>(self: Testparser, func: F) -> Testparser
+    //always succeeds
+    where
+        F: Fn(Testparser) -> Testparser,
+    {
+        let mut newParser = self;
+        let chomp = newParser.clone().chomp;
+        while !newParser.isError {
+            newParser = func(newParser)
+        }
+        newParser.isError = false;
         newParser
     }
 }
@@ -429,6 +469,7 @@ type TestparserFunction<S> = Rc<Fn(S) -> S>;
 
 enum ParserName {
     Digit,
+    Char,
 }
 
 #[cfg(test)]
@@ -436,6 +477,54 @@ mod tests {
     use super::*;
 
     //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
+
+    #[test]
+    fn test_zero_or_more_of() {
+        let mut testparser = Testparser::new("a123Test");
+        let result = testparser.clone().zero_or_more_of(Testparser::digit);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "a123Test");
+        assert_eq!(result.output, "");
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.isError, false);
+
+        testparser = Testparser::new("123Test");
+        let result = testparser.clone().zero_or_more_of(Testparser::digit);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "Test");
+        assert_eq!(result.output, "digitdigitdigit");
+        assert_eq!(result.chomp, "123");
+        assert_eq!(result.isError, false);
+    }
+
+    fn test_one_or_more_of() {
+        let mut testparser = Testparser::new("a123Test");
+        let result = testparser.clone().one_or_more_of(Testparser::digit);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "a123Test");
+        assert_eq!(result.output, "");
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.isError, true);
+
+        testparser = Testparser::new("123Test");
+        let result = testparser.clone().one_or_more_of(Testparser::digit);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "Test");
+        assert_eq!(result.output, "digitdigitdigit");
+        assert_eq!(result.chomp, "123");
+        assert_eq!(result.isError, false);
+    }
+
+    #[test]
+    fn test_pass_fn_as_arg() {
+        let testparser = Testparser::new("123Test");
+        let result = testparser.clone().pass_fn_as_arg(Testparser::digit);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "23Test");
+        assert_eq!(result.output, "digit");
+        assert_eq!(result.chomp, "1");
+        assert_eq!(result.isError, false);
+    }
 
     #[test]
     fn test_multiple_parsers() {
