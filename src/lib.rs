@@ -305,11 +305,9 @@ mod tests {
 
         fn variable_assign(mut self: Testparser) -> Testparser {
             //equals sign, variable name, value (test using int for now), e.g. "= x 1" (x equals 1)
-            self = self
-                .word("= ")
-                .chomp_clear()
-                .variable()
-                .first_success_of([Testparser::float, Testparser::int].to_vec()); //float first so the number before . is not thought of as an int
+            self = self.word("= ").chomp_clear().variable().first_success_of(
+                [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+            ); //float first so the number before . is not thought of as an int
             if self.success {
                 let mut el = TestparserElement::new();
                 let variable_el = self.output[self.output.len() - 2].clone();
@@ -479,6 +477,36 @@ mod tests {
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
+
+        //short name variable assignment to sum of 2 short ints
+        testparser = Testparser::new("= x + 1 2");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(3));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //short name variable assignment to sum of 2 long floats
+        testparser = Testparser::new("= x + 11111.11111 22222.22222");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].float64, Some(33333.33333));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
 
         //short name variable assignment to short int
         testparser = Testparser::new("= x 1");
