@@ -5,7 +5,8 @@ mod tests {
     //int
     //float
     //variable
-    //variable assignment (=)
+    //fn variable_assign (=)
+    //fn variable_sum (+)
 
     //= x + 1 2
     //print x
@@ -209,16 +210,28 @@ mod tests {
             }
         }
 
-        //fn one_of_these(){}
+        fn first_success_of<F>(mut self: Testparser, funcs: Vec<F>) -> Testparser
+        where
+            F: Fn(Testparser) -> Testparser,
+        {
+            if self.success {
+                for func in funcs {
+                    let new_self = func(self.clone());
+                    if new_self.success {
+                        return new_self;
+                    }
+                }
+                self.success = false;
+                return self;
+            } else {
+                return self;
+            };
+        }
 
         //HELPERS
         fn chomp_clear(mut self: Testparser) -> Testparser {
-            if self.success {
-                self.chomp = "".to_string();
-                self
-            } else {
-                self
-            }
+            self.chomp = "".to_string();
+            self
         }
 
         //ELEMENTS/VALUES
@@ -233,7 +246,6 @@ mod tests {
                 if self.success {
                     let mut el = TestparserElement::new();
                     let val = self.clone().chomp.parse().unwrap();
-                    //println!("int {:?}", self.clone().chomp); //.unwrap();
                     el.el_type = Some(TestparserElementType::Int64);
                     el.i64 = Some(val);
                     self.output.push(el);
@@ -293,15 +305,21 @@ mod tests {
 
         fn variable_assign(mut self: Testparser) -> Testparser {
             //equals sign, variable name, value (test using int for now), e.g. "= x 1" (x equals 1)
-            self = self.word("= ").chomp_clear().variable().int();
+            self = self
+                .word("= ")
+                .chomp_clear()
+                .variable()
+                .first_success_of([Testparser::float, Testparser::int].to_vec()); //float first so the number before . is not thought of as an int
             if self.success {
                 let mut el = TestparserElement::new();
                 let variable_el = self.output[self.output.len() - 2].clone();
                 let value_el = self.output[self.output.len() - 1].clone();
+                match value_el.el_type {
+                    Some(TestparserElementType::Int64) => el.i64 = value_el.i64,
+                    _ => el.float64 = value_el.float64,
+                }
                 el.el_type = Some(TestparserElementType::Variable);
                 el.variable = variable_el.variable;
-                el.i64 = value_el.i64;
-                //let index = self.output.iter().position(|x| *x == some_x).unwrap();
                 self.output.remove(self.output.len() - 1);
                 self.output.remove(self.output.len() - 1);
                 self.output.push(el);
@@ -334,14 +352,13 @@ mod tests {
             result.output[0].el_type,
             Some(TestparserElementType::Variable)
         );
-        print!("{:?}", result.output[0].variable);
         assert_eq!(result.output[0].variable, Some("x".to_string()));
         assert_eq!(result.output[0].i64, Some(1));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //long name variable with grapheme assignment to long int
-        testparser = Testparser::new("= éxample_long_variable_name 123456");
+        //long name variable with grapheme assignment to long negative int
+        testparser = Testparser::new("= éxample_long_variable_name -123456");
         let result = testparser.clone().variable_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
@@ -354,10 +371,39 @@ mod tests {
             result.output[0].variable,
             Some("éxample_long_variable_name".to_string())
         );
-        assert_eq!(result.output[0].i64, Some(123456));
+        assert_eq!(result.output[0].i64, Some(-123456));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
-        println!("{:?}", result);
+
+        //short name variable assignment to short float
+        testparser = Testparser::new("= x 1.2");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].float64, Some(1.2));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //short name variable assignment to long negative float
+        testparser = Testparser::new("= x 1.2");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].float64, Some(1.2));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
     }
 
     #[test]
