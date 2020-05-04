@@ -2,7 +2,17 @@
 mod tests {
     //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
 
+    //int
+    //float
+    //variable
+    //variable assignment (=)
+
+    //= x + 1 2
+    //print x
+    //= y + 1.1 2.2
+    //print y
     use std::cmp::PartialEq;
+    use unicode_segmentation::UnicodeSegmentation;
     /*
     map?
     pred?
@@ -37,6 +47,7 @@ mod tests {
         el_type: Option<TestparserElementType>,
         i64: Option<i64>,
         float64: Option<f64>,
+        variable: Option<String>,
     }
 
     impl TestparserElement {
@@ -45,6 +56,7 @@ mod tests {
                 el_type: None,
                 i64: None,
                 float64: None,
+                variable: None,
             }
         }
     }
@@ -52,6 +64,7 @@ mod tests {
     enum TestparserElementType {
         Int64,
         Float64,
+        Variable,
     }
     #[derive(Debug, Clone)]
     struct Testparser {
@@ -73,120 +86,226 @@ mod tests {
             }
         }
 
+        //PRIMITIVES
+
         fn word(mut self: Testparser, expected: &str) -> Testparser {
-            match self.clone().input_remaining.get(0..expected.len()) {
-                Some(next) if next == expected => {
-                    self.input_remaining = self.input_remaining[expected.len()..].to_string();
-                    self.chomp += next;
-                    self.success = true;
-                    self
+            //any series of characters, in the "expected" string
+            if self.success {
+                match self.clone().input_remaining.get(0..expected.len()) {
+                    Some(next) if next == expected => {
+                        self.input_remaining = self.input_remaining[expected.len()..].to_string();
+                        self.chomp += next;
+                        self.success = true;
+                        self
+                    }
+                    _ => {
+                        self.success = false;
+                        self
+                    }
                 }
-                _ => {
-                    self.success = false;
-                    self
-                }
+            } else {
+                self
             }
         }
 
         fn char(mut self: Testparser) -> Testparser {
-            match self.input_remaining.chars().next() {
-                Some(next) => {
-                    self.input_remaining = self.input_remaining[next.len_utf8()..].to_string();
-                    self.chomp += next.encode_utf8(&mut [0; 1]);
-                    self.success = true;
-                    self
+            //a character, excluding ' '(space)
+            if self.success {
+                match self.clone().input_remaining.graphemes(true).next() {
+                    Some(next) => {
+                        if next == " " {
+                            self.success = false;
+                            self
+                        } else {
+                            self.input_remaining = self.input_remaining[next.len()..].to_string();
+                            self.chomp += next;
+                            self.success = true;
+                            self
+                        }
+                    }
+                    _ => {
+                        self.success = false;
+                        self
+                    }
                 }
-                _ => {
-                    self.success = false;
-                    self
-                }
+            } else {
+                self
             }
         }
 
         fn digit(mut self: Testparser) -> Testparser {
-            match self.input_remaining.chars().next() {
-                Some(next) if next.is_digit(10) => {
-                    self.input_remaining = self.input_remaining[next.len_utf8()..].to_string();
-                    self.chomp += next.encode_utf8(&mut [0; 1]);
-                    self.success = true;
-                    self
+            //a single digit 0,1,2,3,4,5,6,7,8,9
+            if self.success {
+                match self.input_remaining.chars().next() {
+                    Some(next) if next.is_digit(10) => {
+                        self.input_remaining = self.input_remaining[next.len_utf8()..].to_string();
+                        self.chomp += next.encode_utf8(&mut [0; 1]);
+                        self.success = true;
+                        self
+                    }
+                    _ => {
+                        self.success = false;
+                        self
+                    }
                 }
-                _ => {
-                    self.success = false;
-                    self
-                }
+            } else {
+                self
             }
         }
 
+        //COMBINATORS
+
         fn one_or_more_of<F>(mut self: Testparser, func: F) -> Testparser
+        //either one or multiple of any parser
         where
             F: Fn(Testparser) -> Testparser,
         {
-            let chomp = self.clone().chomp;
-            while self.success {
-                self = func(self)
-            }
-            if self.chomp == chomp {
-                self.success = false;
-                self
+            if self.success {
+                let chomp = self.clone().chomp;
+                while self.success {
+                    self = func(self)
+                }
+                if self.chomp == chomp {
+                    self.success = false;
+                    self
+                } else {
+                    self.success = true;
+                    self
+                }
             } else {
-                self.success = true;
                 self
             }
         }
 
         fn zero_or_more_of<F>(mut self: Testparser, func: F) -> Testparser
         //always succeeds
+        //either zero, one or multiple of any parser
         where
             F: Fn(Testparser) -> Testparser,
         {
-            while self.success {
-                self = func(self)
-            }
-            self.success = true;
-            self
-        }
-
-        fn optional<F>(mut self: Testparser, func: F) -> Testparser
-        //always succeeds
-        where
-            F: Fn(Testparser) -> Testparser,
-        {
-            self = func(self);
-            self.success = true;
-            self
-        }
-
-        fn int(mut self: Testparser) -> Testparser {
-            self = self
-                .optional(|s: Testparser| Testparser::word(s, "-"))
-                .one_or_more_of(Testparser::digit);
-
             if self.success {
-                let mut el = TestparserElement::new();
-                let val = self.clone().chomp.parse().unwrap();
-                el.el_type = Some(TestparserElementType::Int64);
-                el.i64 = Some(val);
-                self.output.push(el);
+                while self.success {
+                    self = func(self)
+                }
+                self.success = true;
                 self
             } else {
                 self
             }
         }
 
-        fn float(mut self: Testparser) -> Testparser {
-            self = self
-                .optional(|s: Testparser| Testparser::word(s, "-"))
-                .one_or_more_of(Testparser::digit)
-                .word(".")
-                .one_or_more_of(Testparser::digit);
+        fn optional<F>(mut self: Testparser, func: F) -> Testparser
+        //always succeeds
+        //either 1 or zero of any parser
+        where
+            F: Fn(Testparser) -> Testparser,
+        {
+            if self.success {
+                self = func(self);
+                self.success = true;
+                self
+            } else {
+                self
+            }
+        }
 
+        //fn one_of_these(){}
+
+        //HELPERS
+        fn chomp_clear(mut self: Testparser) -> Testparser {
+            if self.success {
+                self.chomp = "".to_string();
+                self
+            } else {
+                self
+            }
+        }
+
+        //ELEMENTS/VALUES
+
+        fn int(mut self: Testparser) -> Testparser {
+            //integer number, e.g. 12 or -123456
+            if self.success {
+                self = self
+                    .optional(|s: Testparser| Testparser::word(s, "-"))
+                    .one_or_more_of(Testparser::digit);
+
+                if self.success {
+                    let mut el = TestparserElement::new();
+                    let val = self.clone().chomp.parse().unwrap();
+                    //println!("int {:?}", self.clone().chomp); //.unwrap();
+                    el.el_type = Some(TestparserElementType::Int64);
+                    el.i64 = Some(val);
+                    self.output.push(el);
+                    self.chomp = "".to_string();
+                    self
+                } else {
+                    self
+                }
+            } else {
+                self
+            }
+        }
+
+        fn float(mut self: Testparser) -> Testparser {
+            //floating point number, e.g. 12.34 or -123.45
+            if self.success {
+                self = self
+                    .optional(|s: Testparser| Testparser::word(s, "-"))
+                    .one_or_more_of(Testparser::digit)
+                    .word(".")
+                    .one_or_more_of(Testparser::digit);
+
+                if self.success {
+                    let mut el = TestparserElement::new();
+                    let val = self.clone().chomp.parse().unwrap();
+                    el.el_type = Some(TestparserElementType::Float64);
+                    el.float64 = Some(val);
+                    self.output.push(el);
+                    self.chomp = "".to_string();
+                    self
+                } else {
+                    self
+                }
+            } else {
+                self
+            }
+        }
+
+        fn variable(mut self: Testparser) -> Testparser {
+            //variable name of chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
+            self = self.one_or_more_of(Testparser::char).word(" ");
             if self.success {
                 let mut el = TestparserElement::new();
-                let val = self.clone().chomp.parse().unwrap();
-                el.el_type = Some(TestparserElementType::Float64);
-                el.float64 = Some(val);
+                let chomp = self.clone().chomp;
+                let variable = chomp[..(chomp.len() - 1)].to_string();
+                el.el_type = Some(TestparserElementType::Variable);
+                el.variable = Some(variable);
                 self.output.push(el);
+                self.chomp = "".to_string();
+                self
+            } else {
+                self
+            }
+        }
+
+        //FUNCTIONS
+
+        fn variable_assign(mut self: Testparser) -> Testparser {
+            //equals sign, variable name, value (test using int for now), e.g. "= x 1" (x equals 1)
+            self = self.word("= ").chomp_clear().variable().int();
+            if self.success {
+                let mut el = TestparserElement::new();
+                let variable_el = self.output[self.output.len() - 2].clone();
+                let value_el = self.output[self.output.len() - 1].clone();
+                el.el_type = Some(TestparserElementType::Variable);
+                el.variable = variable_el.variable;
+                el.i64 = value_el.i64;
+                //let index = self.output.iter().position(|x| *x == some_x).unwrap();
+                self.output.remove(self.output.len() - 1);
+                self.output.remove(self.output.len() - 1);
+                self.output.push(el);
+                self.chomp = "".to_string();
                 self
             } else {
                 self
@@ -195,8 +314,97 @@ mod tests {
     }
 
     #[test]
+    fn test_variable_assign() {
+        //not a variable assignment
+        let mut testparser = Testparser::new(" = x 1");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, " = x 1");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //short name variable assignment to short int
+        testparser = Testparser::new("= x 1");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        print!("{:?}", result.output[0].variable);
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(1));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //long name variable with grapheme assignment to long int
+        testparser = Testparser::new("= éxample_long_variable_name 123456");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(
+            result.output[0].variable,
+            Some("éxample_long_variable_name".to_string())
+        );
+        assert_eq!(result.output[0].i64, Some(123456));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+        println!("{:?}", result);
+    }
+
+    #[test]
+    fn test_variable() {
+        //not a variable
+        let mut testparser = Testparser::new(" x = 1");
+        let result = testparser.clone().variable();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, " x = 1");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //short name variable
+        testparser = Testparser::new("x = 1");
+        let result = testparser.clone().variable();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "= 1");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //long name variable with grapheme
+        testparser = Testparser::new("éxample_long_variable_name = 123.45");
+        let result = testparser.clone().variable();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "= 123.45");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(
+            result.output[0].variable,
+            Some("éxample_long_variable_name".to_string())
+        );
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+    }
+    #[test]
     fn test_float() {
-        //not an int
+        //not a float
         let mut testparser = Testparser::new("a123.456");
         let result = testparser.clone().float();
         assert_eq!(result.input_original, testparser.input_original);
@@ -216,7 +424,7 @@ mod tests {
             Some(TestparserElementType::Float64)
         );
         assert_eq!(result.output[0].float64, Some(12.34));
-        assert_eq!(result.chomp, "12.34");
+        assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
         //positive large float
@@ -230,7 +438,7 @@ mod tests {
             Some(TestparserElementType::Float64)
         );
         assert_eq!(result.output[0].float64, Some(123456.78));
-        assert_eq!(result.chomp, "123456.78");
+        assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
         //negative float
@@ -244,7 +452,7 @@ mod tests {
             Some(TestparserElementType::Float64)
         );
         assert_eq!(result.output[0].float64, Some(-123456.78));
-        assert_eq!(result.chomp, "-123456.78");
+        assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
     }
 
@@ -267,7 +475,7 @@ mod tests {
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(TestparserElementType::Int64));
         assert_eq!(result.output[0].i64, Some(12));
-        assert_eq!(result.chomp, "12");
+        assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
         //positive large int
@@ -278,7 +486,7 @@ mod tests {
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(TestparserElementType::Int64));
         assert_eq!(result.output[0].i64, Some(123456));
-        assert_eq!(result.chomp, "123456");
+        assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
         //negative int
@@ -289,7 +497,7 @@ mod tests {
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(TestparserElementType::Int64));
         assert_eq!(result.output[0].i64, Some(-123456));
-        assert_eq!(result.chomp, "-123456");
+        assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
     }
 

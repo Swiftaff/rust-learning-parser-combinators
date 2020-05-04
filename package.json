@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "watch_fmt_test": "cargo watch -x test",
+    "watch_fmt_test_backtrace": "set RUST_BACKTRACE=1 && cargo watch -x test",
     "watch_fmt_test_no_capture": "cargo watch -x \"test -- --nocapture\""
   },
   "repository": {
