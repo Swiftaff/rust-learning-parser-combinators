@@ -2,11 +2,11 @@
 mod tests {
     //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
 
-    //int
-    //float
-    //variable
-    //fn variable_assign (=)
-    //fn variable_sum (+)
+    //el_int
+    //el_float
+    //el_var
+    //fn fn_var_assign (=)
+    //fn fn_var_sum (+)
 
     //= x + 1 2
     //print x
@@ -27,8 +27,8 @@ mod tests {
     right
     one_or_more
     zero_or_more
-    any_char
-    whitespace_char
+    any_prim_char
+    whitespace_prim_char
     space_one_or_more
     space_zero_or_more
     quoted_string
@@ -48,7 +48,7 @@ mod tests {
         el_type: Option<TestparserElementType>,
         i64: Option<i64>,
         float64: Option<f64>,
-        variable: Option<String>,
+        var: Option<String>,
     }
 
     impl TestparserElement {
@@ -57,7 +57,7 @@ mod tests {
                 el_type: None,
                 i64: None,
                 float64: None,
-                variable: None,
+                var: None,
             }
         }
     }
@@ -65,7 +65,7 @@ mod tests {
     enum TestparserElementType {
         Int64,
         Float64,
-        Variable,
+        Var,
     }
     #[derive(Debug, Clone)]
     struct Testparser {
@@ -89,8 +89,8 @@ mod tests {
 
         //PRIMITIVES
 
-        fn word(mut self: Testparser, expected: &str) -> Testparser {
-            //any series of characters, in the "expected" string
+        fn prim_word(mut self: Testparser, expected: &str) -> Testparser {
+            //any series of prim_characters, in the "expected" string
             if self.success {
                 match self.clone().input_remaining.get(0..expected.len()) {
                     Some(next) if next == expected => {
@@ -109,8 +109,8 @@ mod tests {
             }
         }
 
-        fn char(mut self: Testparser) -> Testparser {
-            //a character, excluding ' '(space)
+        fn prim_char(mut self: Testparser) -> Testparser {
+            //a prim_character, excluding ' '(space)
             if self.success {
                 match self.clone().input_remaining.graphemes(true).next() {
                     Some(next) => {
@@ -134,8 +134,8 @@ mod tests {
             }
         }
 
-        fn digit(mut self: Testparser) -> Testparser {
-            //a single digit 0,1,2,3,4,5,6,7,8,9
+        fn prim_digit(mut self: Testparser) -> Testparser {
+            //a single prim_digit 0,1,2,3,4,5,6,7,8,9
             if self.success {
                 match self.input_remaining.chars().next() {
                     Some(next) if next.is_digit(10) => {
@@ -156,7 +156,7 @@ mod tests {
 
         //COMBINATORS
 
-        fn one_or_more_of<F>(mut self: Testparser, func: F) -> Testparser
+        fn combi_one_or_more_of<F>(mut self: Testparser, func: F) -> Testparser
         //either one or multiple of any parser
         where
             F: Fn(Testparser) -> Testparser,
@@ -178,7 +178,7 @@ mod tests {
             }
         }
 
-        fn zero_or_more_of<F>(mut self: Testparser, func: F) -> Testparser
+        fn combi_zero_or_more_of<F>(mut self: Testparser, func: F) -> Testparser
         //always succeeds
         //either zero, one or multiple of any parser
         where
@@ -195,7 +195,7 @@ mod tests {
             }
         }
 
-        fn optional<F>(mut self: Testparser, func: F) -> Testparser
+        fn combi_optional<F>(mut self: Testparser, func: F) -> Testparser
         //always succeeds
         //either 1 or zero of any parser
         where
@@ -210,7 +210,7 @@ mod tests {
             }
         }
 
-        fn first_success_of<F>(mut self: Testparser, funcs: Vec<F>) -> Testparser
+        fn combi_first_success_of<F>(mut self: Testparser, funcs: Vec<F>) -> Testparser
         where
             F: Fn(Testparser) -> Testparser,
         {
@@ -236,12 +236,12 @@ mod tests {
 
         //ELEMENTS/VALUES
 
-        fn int(mut self: Testparser) -> Testparser {
+        fn el_int(mut self: Testparser) -> Testparser {
             //integer number, e.g. 12 or -123456
             if self.success {
                 self = self
-                    .optional(|s: Testparser| Testparser::word(s, "-"))
-                    .one_or_more_of(Testparser::digit);
+                    .combi_optional(|s: Testparser| Testparser::prim_word(s, "-"))
+                    .combi_one_or_more_of(Testparser::prim_digit);
 
                 if self.success {
                     let mut el = TestparserElement::new();
@@ -259,14 +259,14 @@ mod tests {
             }
         }
 
-        fn float(mut self: Testparser) -> Testparser {
+        fn el_float(mut self: Testparser) -> Testparser {
             //floating point number, e.g. 12.34 or -123.45
             if self.success {
                 self = self
-                    .optional(|s: Testparser| Testparser::word(s, "-"))
-                    .one_or_more_of(Testparser::digit)
-                    .word(".")
-                    .one_or_more_of(Testparser::digit);
+                    .combi_optional(|s: Testparser| Testparser::prim_word(s, "-"))
+                    .combi_one_or_more_of(Testparser::prim_digit)
+                    .prim_word(".")
+                    .combi_one_or_more_of(Testparser::prim_digit);
 
                 if self.success {
                     let mut el = TestparserElement::new();
@@ -284,15 +284,17 @@ mod tests {
             }
         }
 
-        fn variable(mut self: Testparser) -> Testparser {
-            //variable name of chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
-            self = self.one_or_more_of(Testparser::char).word(" ");
+        fn el_var(mut self: Testparser) -> Testparser {
+            //el_var name of prim_chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
+            self = self
+                .combi_one_or_more_of(Testparser::prim_char)
+                .prim_word(" ");
             if self.success {
                 let mut el = TestparserElement::new();
                 let chomp = self.clone().chomp;
-                let variable = chomp[..(chomp.len() - 1)].to_string();
-                el.el_type = Some(TestparserElementType::Variable);
-                el.variable = Some(variable);
+                let el_var = chomp[..(chomp.len() - 1)].to_string();
+                el.el_type = Some(TestparserElementType::Var);
+                el.var = Some(el_var);
                 self.output.push(el);
                 self.chomp = "".to_string();
                 self
@@ -303,11 +305,20 @@ mod tests {
 
         //FUNCTIONS
 
-        fn variable_assign(mut self: Testparser) -> Testparser {
-            //equals sign, variable name, value (test using int for now), e.g. "= x 1" (x equals 1)
-            self = self.word("= ").chomp_clear().variable().first_success_of(
-                [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
-            ); //float first so the number before . is not thought of as an int
+        fn fn_var_assign(mut self: Testparser) -> Testparser {
+            //equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
+            self = self
+                .prim_word("= ")
+                .chomp_clear()
+                .el_var()
+                .combi_first_success_of(
+                    [
+                        Testparser::fn_var_sum,
+                        Testparser::el_float,
+                        Testparser::el_int,
+                    ]
+                    .to_vec(),
+                ); //el_float first so the number before . is not thought of as an el_int
             if self.success {
                 let mut el = TestparserElement::new();
                 let variable_el = self.output[self.output.len() - 2].clone();
@@ -316,8 +327,8 @@ mod tests {
                     Some(TestparserElementType::Int64) => el.i64 = value_el.i64,
                     _ => el.float64 = value_el.float64,
                 }
-                el.el_type = Some(TestparserElementType::Variable);
-                el.variable = variable_el.variable;
+                el.el_type = Some(TestparserElementType::Var);
+                el.var = variable_el.var;
                 self.output.remove(self.output.len() - 1);
                 self.output.remove(self.output.len() - 1);
                 self.output.push(el);
@@ -328,35 +339,55 @@ mod tests {
             }
         }
 
-        fn variable_sum(mut self: Testparser) -> Testparser {
+        fn fn_var_sum(mut self: Testparser) -> Testparser {
             //plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
             let mut original_self = self.clone();
             let without_brackets = self
                 .clone()
-                .word("+ ")
+                .prim_word("+ ")
                 .chomp_clear()
-                .first_success_of(
-                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                .combi_first_success_of(
+                    [
+                        Testparser::fn_var_sum,
+                        Testparser::el_float,
+                        Testparser::el_int,
+                    ]
+                    .to_vec(),
                 )
-                .word(" ")
+                .prim_word(" ")
                 .chomp_clear()
-                .first_success_of(
-                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                .combi_first_success_of(
+                    [
+                        Testparser::fn_var_sum,
+                        Testparser::el_float,
+                        Testparser::el_int,
+                    ]
+                    .to_vec(),
                 );
 
             let with_brackets = self
                 .clone()
-                .word("(+ ")
+                .prim_word("(+ ")
                 .chomp_clear()
-                .first_success_of(
-                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                .combi_first_success_of(
+                    [
+                        Testparser::fn_var_sum,
+                        Testparser::el_float,
+                        Testparser::el_int,
+                    ]
+                    .to_vec(),
                 )
-                .word(" ")
+                .prim_word(" ")
                 .chomp_clear()
-                .first_success_of(
-                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                .combi_first_success_of(
+                    [
+                        Testparser::fn_var_sum,
+                        Testparser::el_float,
+                        Testparser::el_int,
+                    ]
+                    .to_vec(),
                 )
-                .word(")");
+                .prim_word(")");
             if without_brackets.success {
                 self = without_brackets;
             } else if with_brackets.success {
@@ -374,7 +405,7 @@ mod tests {
                 (Some(el1_type), Some(el2_type)) => {
                     if el1_type == el2_type {
                         match el1_type {
-                            //if it's an int set the i64 of the new element to the sum of the 2 ints
+                            //if it's an el_int set the i64 of the new element to the sum of the 2 ints
                             TestparserElementType::Int64 => {
                                 match (variable1_el.i64, variable2_el.i64) {
                                     (Some(val1), Some(val2)) => {
@@ -407,18 +438,18 @@ mod tests {
 
     #[test]
     fn test_variable_sum() {
-        //not a valid variable sum
+        //not a valid el_var sum
         let mut testparser = Testparser::new(" + test 1");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, " + test 1");
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
 
-        //short int plus short int, with optional brackets
+        //short el_int plus short el_int, with combi_optional brackets
         testparser = Testparser::new("(+ 1 2)");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -427,9 +458,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //short int plus short int
+        //short el_int plus short el_int
         testparser = Testparser::new("+ 1 2");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -438,9 +469,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //long int plus long int
+        //long el_int plus long el_int
         testparser = Testparser::new("+ 11111 22222");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -449,9 +480,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //long int plus negative long int
+        //long el_int plus negative long el_int
         testparser = Testparser::new("+ 11111 -22222");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -460,9 +491,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //short float plus short float
+        //short el_float plus short el_float
         testparser = Testparser::new("+ 1.1 2.2");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -475,9 +506,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //long float plus long float
+        //long el_float plus long el_float
         testparser = Testparser::new("+ 11111.11111 22222.22222");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -489,9 +520,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //long float plus negative long float
+        //long el_float plus negative long el_float
         testparser = Testparser::new("+ 11111.11111 -22222.22222");
-        let result = testparser.clone().variable_sum();
+        let result = testparser.clone().fn_var_sum();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -505,9 +536,9 @@ mod tests {
     }
     #[test]
     fn test_variable_assign() {
-        //not a variable assignment
+        //not a el_var assignment
         let mut testparser = Testparser::new(" = x 1");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, " = x 1");
         assert_eq!(result.output.len(), 0);
@@ -517,156 +548,126 @@ mod tests {
         //"= x (+ 1 (+ 2 (+ 3 4)))", i.e. x = 1 + (2 + (3 + 4))
         //as below with brackets notation
         testparser = Testparser::new("= x (+ 1 (+ 2 (+ 3 4)))");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].i64, Some(10));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
         //"= x + 1 + 2 + 3 4", i.e. x = 1 + (2 + (3 + 4))
-        //short name variable assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints
+        //short name el_var assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints
         testparser = Testparser::new("= x + 1 + 2 + 3 4");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].i64, Some(10));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
         //"= x + + 1 2 + 3 4", i.e. x = (1 + 2) + (3 + 4))
-        //short name variable assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints, different format
+        //short name el_var assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints, different format
         testparser = Testparser::new("= x + + 1 2 + 3 4");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].i64, Some(10));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
         //"= x + 1 + 2 3", i.e. x = 1 + (2 + 3)
-        //short name variable assignment to sum of 2 short ints, where the second is a sum of 2 short ints
+        //short name el_var assignment to sum of 2 short ints, where the second is a sum of 2 short ints
         testparser = Testparser::new("= x + 1 + 2 3");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].i64, Some(6));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //short name variable assignment to sum of 2 short ints
+        //short name el_var assignment to sum of 2 short ints
         testparser = Testparser::new("= x + 1 2");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].i64, Some(3));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //short name variable assignment to sum of 2 long floats
+        //short name el_var assignment to sum of 2 long floats
         testparser = Testparser::new("= x + 11111.11111 22222.22222");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].float64, Some(33333.33333));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //short name variable assignment to short int
+        //short name el_var assignment to short el_int
         testparser = Testparser::new("= x 1");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].i64, Some(1));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //long name variable with grapheme assignment to long negative int
+        //long name el_var with grapheme assignment to long negative el_int
         testparser = Testparser::new("= éxample_long_variable_name -123456");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
         assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(
-            result.output[0].variable,
+            result.output[0].var,
             Some("éxample_long_variable_name".to_string())
         );
         assert_eq!(result.output[0].i64, Some(-123456));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //short name variable assignment to short float
+        //short name el_var assignment to short el_float
         testparser = Testparser::new("= x 1.2");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].float64, Some(1.2));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //short name variable assignment to long negative float
+        //short name el_var assignment to long negative el_float
         testparser = Testparser::new("= x 1.2");
-        let result = testparser.clone().variable_assign();
+        let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.output[0].float64, Some(1.2));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
@@ -674,41 +675,35 @@ mod tests {
 
     #[test]
     fn test_variable() {
-        //not a variable
+        //not a el_var
         let mut testparser = Testparser::new(" x = 1");
-        let result = testparser.clone().variable();
+        let result = testparser.clone().el_var();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, " x = 1");
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
 
-        //short name variable
+        //short name el_var
         testparser = Testparser::new("x = 1");
-        let result = testparser.clone().variable();
+        let result = testparser.clone().el_var();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "= 1");
         assert_eq!(result.output.len(), 1);
-        assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //long name variable with grapheme
+        //long name el_var with grapheme
         testparser = Testparser::new("éxample_long_variable_name = 123.45");
-        let result = testparser.clone().variable();
+        let result = testparser.clone().el_var();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "= 123.45");
         assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
         assert_eq!(
-            result.output[0].el_type,
-            Some(TestparserElementType::Variable)
-        );
-        assert_eq!(
-            result.output[0].variable,
+            result.output[0].var,
             Some("éxample_long_variable_name".to_string())
         );
         assert_eq!(result.chomp, "");
@@ -716,18 +711,18 @@ mod tests {
     }
     #[test]
     fn test_float() {
-        //not a float
+        //not a el_float
         let mut testparser = Testparser::new("a123.456");
-        let result = testparser.clone().float();
+        let result = testparser.clone().el_float();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "a123.456");
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
 
-        //positive small float
+        //positive small el_float
         testparser = Testparser::new("12.34");
-        let result = testparser.clone().float();
+        let result = testparser.clone().el_float();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -739,9 +734,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //positive large float
+        //positive large el_float
         testparser = Testparser::new("123456.78");
-        let result = testparser.clone().float();
+        let result = testparser.clone().el_float();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -753,9 +748,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //negative float
+        //negative el_float
         testparser = Testparser::new("-123456.78");
-        let result = testparser.clone().float();
+        let result = testparser.clone().el_float();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -770,18 +765,18 @@ mod tests {
 
     #[test]
     fn test_int() {
-        //not an int
+        //not an el_int
         let mut testparser = Testparser::new("a123");
-        let result = testparser.clone().int();
+        let result = testparser.clone().el_int();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "a123");
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
 
-        //positive small int
+        //positive small el_int
         testparser = Testparser::new("12");
-        let result = testparser.clone().int();
+        let result = testparser.clone().el_int();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -790,9 +785,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //positive large int
+        //positive large el_int
         testparser = Testparser::new("123456");
-        let result = testparser.clone().int();
+        let result = testparser.clone().el_int();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -801,9 +796,9 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //negative int
+        //negative el_int
         testparser = Testparser::new("-123456");
-        let result = testparser.clone().int();
+        let result = testparser.clone().el_int();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -814,9 +809,9 @@ mod tests {
     }
 
     #[test]
-    fn test_optional() {
+    fn test_combi_optional() {
         let mut testparser = Testparser::new("a123Test");
-        let result = testparser.clone().optional(Testparser::char);
+        let result = testparser.clone().combi_optional(Testparser::prim_char);
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "123Test");
         assert_eq!(result.output.len(), 0);
@@ -824,7 +819,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         testparser = Testparser::new("a123Test");
-        let result = testparser.clone().zero_or_more_of(Testparser::digit);
+        let result = testparser
+            .clone()
+            .combi_zero_or_more_of(Testparser::prim_digit);
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "a123Test");
         assert_eq!(result.output.len(), 0);
@@ -833,9 +830,11 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_or_more_of() {
+    fn test_combi_zero_or_more_of() {
         let mut testparser = Testparser::new("a123Test");
-        let result = testparser.clone().zero_or_more_of(Testparser::digit);
+        let result = testparser
+            .clone()
+            .combi_zero_or_more_of(Testparser::prim_digit);
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "a123Test");
         assert_eq!(result.output.len(), 0);
@@ -843,7 +842,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         testparser = Testparser::new("123Test");
-        let result = testparser.clone().zero_or_more_of(Testparser::digit);
+        let result = testparser
+            .clone()
+            .combi_zero_or_more_of(Testparser::prim_digit);
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "Test");
         assert_eq!(result.output.len(), 0);
@@ -851,9 +852,11 @@ mod tests {
         assert_eq!(result.success, true);
     }
     #[test]
-    fn test_one_or_more_of() {
+    fn test_combi_one_or_more_of() {
         let mut testparser = Testparser::new("a123Test");
-        let result = testparser.clone().one_or_more_of(Testparser::digit);
+        let result = testparser
+            .clone()
+            .combi_one_or_more_of(Testparser::prim_digit);
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "a123Test");
         assert_eq!(result.output.len(), 0);
@@ -861,7 +864,9 @@ mod tests {
         assert_eq!(result.success, false);
 
         testparser = Testparser::new("123Test");
-        let result = testparser.clone().one_or_more_of(Testparser::digit);
+        let result = testparser
+            .clone()
+            .combi_one_or_more_of(Testparser::prim_digit);
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "Test");
         assert_eq!(result.output.len(), 0);
@@ -872,7 +877,7 @@ mod tests {
     #[test]
     fn test_multiple_parsers() {
         let testparser = Testparser::new("1Test");
-        let result = testparser.clone().digit().word("Te");
+        let result = testparser.clone().prim_digit().prim_word("Te");
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "st");
         assert_eq!(result.output.len(), 0);
@@ -880,9 +885,9 @@ mod tests {
         assert_eq!(result.success, true);
     }
     #[test]
-    fn test_digit() {
+    fn test_prim_digit() {
         let testparser = Testparser::new("123Test");
-        let result = testparser.clone().digit().digit().digit();
+        let result = testparser.clone().prim_digit().prim_digit().prim_digit();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "Test");
         assert_eq!(result.output.len(), 0);
@@ -890,9 +895,14 @@ mod tests {
         assert_eq!(result.success, true);
     }
     #[test]
-    fn test_char() {
+    fn test_prim_char() {
         let testparser = Testparser::new("Testing 123");
-        let result = testparser.clone().char().char().char().char();
+        let result = testparser
+            .clone()
+            .prim_char()
+            .prim_char()
+            .prim_char()
+            .prim_char();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "ing 123");
         assert_eq!(result.output.len(), 0);
@@ -901,14 +911,14 @@ mod tests {
     }
 
     #[test]
-    fn test_word() {
+    fn test_prim_word() {
         let testparser = Testparser::new("Testing 123");
         let result = testparser
             .clone()
-            .word("Test")
-            .word("ing")
-            .word(" ")
-            .word("123");
+            .prim_word("Test")
+            .prim_word("ing")
+            .prim_word(" ")
+            .prim_word("123");
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
