@@ -333,10 +333,14 @@ mod tests {
             self = self
                 .word("+ ")
                 .chomp_clear()
-                .first_success_of([Testparser::float, Testparser::int].to_vec())
+                .first_success_of(
+                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                )
                 .word(" ")
                 .chomp_clear()
-                .first_success_of([Testparser::float, Testparser::int].to_vec());
+                .first_success_of(
+                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                );
             if self.success {
                 let mut el = TestparserElement::new();
                 let variable1_el = self.output[self.output.len() - 2].clone();
@@ -477,6 +481,54 @@ mod tests {
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
+
+        //"= x + 1 + 2 + 3 4", i.e. x = 1 + (2 + (3 + 4))
+        //short name variable assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints
+        testparser = Testparser::new("= x + 1 + 2 + 3 4");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(10));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //"= x + + 1 2 + 3 4", i.e. x = (1 + 2) + (3 + 4))
+        //short name variable assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints, different format
+        testparser = Testparser::new("= x + + 1 2 + 3 4");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(10));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //"= x + 1 + 2 3", i.e. x = 1 + (2 + 3)
+        //short name variable assignment to sum of 2 short ints, where the second is a sum of 2 short ints
+        testparser = Testparser::new("= x + 1 + 2 3");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(6));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
 
         //short name variable assignment to sum of 2 short ints
         testparser = Testparser::new("= x + 1 2");
