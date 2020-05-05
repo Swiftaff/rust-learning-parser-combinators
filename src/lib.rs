@@ -154,6 +154,47 @@ mod tests {
             }
         }
 
+        fn prim_eol(mut self: Testparser) -> Testparser {
+            //\r\n or \n
+            if self.success {
+                let newline1 = self
+                    .clone()
+                    .combi_one_or_more_of(|s| Testparser::prim_word(s, "\r\n"));
+                let newline2 = self
+                    .clone()
+                    .combi_one_or_more_of(|s| Testparser::prim_word(s, "\n"));
+                if newline1.success {
+                    newline1
+                } else if newline2.success {
+                    newline2
+                } else {
+                    self.success = false;
+                    self
+                }
+            } else {
+                self
+            }
+        }
+
+        fn prim_eof(mut self: Testparser) -> Testparser {
+            //check for an empty string...
+
+            if self.success && self.input_remaining.len() == 0 {
+                self
+            } else {
+                self.success = false;
+                self
+            }
+        }
+
+        fn prim_eol_or_eof(self: Testparser) -> Testparser {
+            if self.success {
+                self.combi_first_success_of([Testparser::prim_eol, Testparser::prim_eof].to_vec())
+            } else {
+                self
+            }
+        }
+
         //COMBINATORS
 
         fn combi_one_or_more_of<F>(mut self: Testparser, func: F) -> Testparser
@@ -314,11 +355,13 @@ mod tests {
                 .combi_first_success_of(
                     [
                         Testparser::fn_var_sum,
+                        //el_float first so the number before . is not thought of as an el_int
                         Testparser::el_float,
                         Testparser::el_int,
                     ]
                     .to_vec(),
-                ); //el_float first so the number before . is not thought of as an el_int
+                )
+                .prim_eol_or_eof();
             if self.success {
                 let mut el = TestparserElement::new();
                 let variable_el = self.output[self.output.len() - 2].clone();
@@ -501,7 +544,6 @@ mod tests {
             result.output[0].el_type,
             Some(TestparserElementType::Float64)
         );
-        println!("************{:?}", result);
         assert_eq!(result.output[0].float64, Some(3.3000000000000003)); // yikes, floats
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
@@ -531,6 +573,30 @@ mod tests {
             Some(TestparserElementType::Float64)
         );
         assert_eq!(result.output[0].float64, Some(-11111.11111));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+    }
+    #[test]
+    fn test_multiple_variable_assign() {
+        let testparser = Testparser::new("= x + 1 2\r\n= y + 3 4\r\n= z + 5.0 6.0");
+        let result = testparser
+            .clone()
+            .fn_var_assign()
+            .fn_var_assign()
+            .fn_var_assign();
+        println!("{:?}", result);
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 3);
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(3));
+        assert_eq!(result.output[1].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[1].var, Some("y".to_string()));
+        assert_eq!(result.output[1].i64, Some(7));
+        assert_eq!(result.output[2].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[2].var, Some("z".to_string()));
+        assert_eq!(result.output[2].float64, Some(11.0));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
     }
@@ -623,6 +689,18 @@ mod tests {
 
         //short name el_var assignment to short el_int
         testparser = Testparser::new("= x 1");
+        let result = testparser.clone().fn_var_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Var));
+        assert_eq!(result.output[0].var, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(1));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //short name el_var assignment to short el_int with newlines
+        testparser = Testparser::new("= x 1\r\n\r\n\r\n");
         let result = testparser.clone().fn_var_assign();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
@@ -884,6 +962,132 @@ mod tests {
         assert_eq!(result.chomp, "1Te");
         assert_eq!(result.success, true);
     }
+    #[test]
+    fn test_prim_eof_or_eol() {
+        //not eof or eol
+        let testparser = Testparser::new("1");
+        let result = testparser.clone().prim_eol_or_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "1");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //eof
+        let testparser = Testparser::new("");
+        let result = testparser.clone().prim_eol_or_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+
+        //single eol1
+        let testparser = Testparser::new("\n");
+        let result = testparser.clone().prim_eol_or_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\n");
+        assert_eq!(result.success, true);
+
+        //single eol2
+        let testparser = Testparser::new("\r\n");
+        let result = testparser.clone().prim_eol_or_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\r\n");
+        assert_eq!(result.success, true);
+
+        //multiple eol1
+        let testparser = Testparser::new("\n\n\n\n");
+        let result = testparser.clone().prim_eol_or_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\n\n\n\n");
+        assert_eq!(result.success, true);
+
+        //multiple eol2
+        let testparser = Testparser::new("\r\n\r\n\r\n\r\n");
+        let result = testparser.clone().prim_eol_or_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\r\n\r\n\r\n\r\n");
+        assert_eq!(result.success, true);
+    }
+
+    #[test]
+    fn test_prim_eof() {
+        //not eof
+        let testparser = Testparser::new("1");
+        let result = testparser.clone().prim_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "1");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //eof
+        let testparser = Testparser::new("");
+        let result = testparser.clone().prim_eof();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+    }
+
+    #[test]
+    fn test_prim_eol() {
+        //not an eol
+        let testparser = Testparser::new("1");
+        let result = testparser.clone().prim_eol();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "1");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //single eol1
+        let testparser = Testparser::new("\n");
+        let result = testparser.clone().prim_eol();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\n");
+        assert_eq!(result.success, true);
+
+        //single eol2
+        let testparser = Testparser::new("\r\n");
+        let result = testparser.clone().prim_eol();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\r\n");
+        assert_eq!(result.success, true);
+
+        //multiple eol1
+        let testparser = Testparser::new("\n\n\n\n");
+        let result = testparser.clone().prim_eol();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\n\n\n\n");
+        assert_eq!(result.success, true);
+
+        //multiple eol2
+        let testparser = Testparser::new("\r\n\r\n\r\n\r\n");
+        let result = testparser.clone().prim_eol();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\r\n\r\n\r\n\r\n");
+        assert_eq!(result.success, true);
+    }
+
     #[test]
     fn test_prim_digit() {
         let testparser = Testparser::new("123Test");
