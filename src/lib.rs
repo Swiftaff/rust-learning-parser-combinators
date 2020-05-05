@@ -330,7 +330,9 @@ mod tests {
 
         fn variable_sum(mut self: Testparser) -> Testparser {
             //plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
-            self = self
+            let mut original_self = self.clone();
+            let without_brackets = self
+                .clone()
                 .word("+ ")
                 .chomp_clear()
                 .first_success_of(
@@ -341,45 +343,64 @@ mod tests {
                 .first_success_of(
                     [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
                 );
-            if self.success {
-                let mut el = TestparserElement::new();
-                let variable1_el = self.output[self.output.len() - 2].clone();
-                let variable2_el = self.output[self.output.len() - 1].clone();
-                //check both values have the same element type
-                match (variable1_el.el_type, variable2_el.el_type) {
-                    (Some(el1_type), Some(el2_type)) => {
-                        if el1_type == el2_type {
-                            match el1_type {
-                                //if it's an int set the i64 of the new element to the sum of the 2 ints
-                                TestparserElementType::Int64 => {
-                                    match (variable1_el.i64, variable2_el.i64) {
-                                        (Some(val1), Some(val2)) => {
-                                            el.i64 = Some(val1 + val2);
-                                        }
-                                        (_, _) => (),
-                                    }
-                                }
-                                _ => match (variable1_el.float64, variable2_el.float64) {
+
+            let with_brackets = self
+                .clone()
+                .word("(+ ")
+                .chomp_clear()
+                .first_success_of(
+                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                )
+                .word(" ")
+                .chomp_clear()
+                .first_success_of(
+                    [Testparser::variable_sum, Testparser::float, Testparser::int].to_vec(),
+                )
+                .word(")");
+            if without_brackets.success {
+                self = without_brackets;
+            } else if with_brackets.success {
+                self = with_brackets;
+            } else {
+                original_self.success = false;
+                return original_self;
+            }
+
+            let mut el = TestparserElement::new();
+            let variable1_el = self.output[self.output.len() - 2].clone();
+            let variable2_el = self.output[self.output.len() - 1].clone();
+            //check both values have the same element type
+            match (variable1_el.el_type, variable2_el.el_type) {
+                (Some(el1_type), Some(el2_type)) => {
+                    if el1_type == el2_type {
+                        match el1_type {
+                            //if it's an int set the i64 of the new element to the sum of the 2 ints
+                            TestparserElementType::Int64 => {
+                                match (variable1_el.i64, variable2_el.i64) {
                                     (Some(val1), Some(val2)) => {
-                                        el.float64 = Some(val1 + val2);
+                                        el.i64 = Some(val1 + val2);
                                     }
                                     (_, _) => (),
-                                },
+                                }
                             }
-                            el.el_type = Some(el1_type);
-                            self.output.remove(self.output.len() - 1);
-                            self.output.remove(self.output.len() - 1);
-                            self.output.push(el);
-                            self.chomp = "".to_string();
-                            self
-                        } else {
-                            self
+                            _ => match (variable1_el.float64, variable2_el.float64) {
+                                (Some(val1), Some(val2)) => {
+                                    el.float64 = Some(val1 + val2);
+                                }
+                                (_, _) => (),
+                            },
                         }
+                        el.el_type = Some(el1_type);
+                        self.output.remove(self.output.len() - 1);
+                        self.output.remove(self.output.len() - 1);
+                        self.output.push(el);
+                        self.chomp = "".to_string();
+                        self
+                    } else {
+                        self
                     }
-                    (_, _) => self,
                 }
-            } else {
-                self
+                (_, _) => self,
             }
         }
     }
@@ -394,6 +415,17 @@ mod tests {
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
+
+        //short int plus short int, with optional brackets
+        testparser = Testparser::new("(+ 1 2)");
+        let result = testparser.clone().variable_sum();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(TestparserElementType::Int64));
+        assert_eq!(result.output[0].i64, Some(3));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
 
         //short int plus short int
         testparser = Testparser::new("+ 1 2");
@@ -481,6 +513,22 @@ mod tests {
         assert_eq!(result.output.len(), 0);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, false);
+
+        //"= x (+ 1 (+ 2 (+ 3 4)))", i.e. x = 1 + (2 + (3 + 4))
+        //as below with brackets notation
+        testparser = Testparser::new("= x (+ 1 (+ 2 (+ 3 4)))");
+        let result = testparser.clone().variable_assign();
+        assert_eq!(result.input_original, testparser.input_original);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(
+            result.output[0].el_type,
+            Some(TestparserElementType::Variable)
+        );
+        assert_eq!(result.output[0].variable, Some("x".to_string()));
+        assert_eq!(result.output[0].i64, Some(10));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
 
         //"= x + 1 + 2 + 3 4", i.e. x = 1 + (2 + (3 + 4))
         //short name variable assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints
