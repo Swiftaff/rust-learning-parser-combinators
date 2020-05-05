@@ -87,6 +87,14 @@ mod tests {
             }
         }
 
+        //MAIN PARSER
+        fn parse(mut self: Testparser) -> Testparser {
+            while self.success && self.input_remaining.len() > 0 {
+                self = self.combi_first_success_of([Testparser::fn_var_assign].to_vec());
+            }
+            self
+        }
+
         //PRIMITIVES
 
         fn prim_word(mut self: Testparser, expected: &str) -> Testparser {
@@ -579,12 +587,7 @@ mod tests {
     #[test]
     fn test_multiple_variable_assign() {
         let testparser = Testparser::new("= x + 1 2\r\n= y + 3 4\r\n= z + 5.0 6.0");
-        let result = testparser
-            .clone()
-            .fn_var_assign()
-            .fn_var_assign()
-            .fn_var_assign();
-        println!("{:?}", result);
+        let result = testparser.clone().parse();
         assert_eq!(result.input_original, testparser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 3);
