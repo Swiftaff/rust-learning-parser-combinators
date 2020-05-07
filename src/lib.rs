@@ -2,7 +2,17 @@ use std::cmp::PartialEq;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone)]
-struct ParserElement {
+///Usually the end result of parsing a complete individual 'thing' within the whole parsed output<br /><br />
+///
+///A completed parse, should result in a vec of ParserElements in the parser.output<br /><br />
+///
+///All attributes are Options defining a single instance of a thing<br />
+/// - el_type: the type of thing it is<br />
+/// - what 'value' it should have depending on which are populated, here there are only 2 types<br />
+///   - in64<br />
+///   - float64<br />
+/// - var_name: a string for the name if it is a variable
+pub struct ParserElement {
     el_type: Option<ParserElementType>,
     int64: Option<i64>,
     float64: Option<f64>,
@@ -10,7 +20,7 @@ struct ParserElement {
 }
 
 impl ParserElement {
-    fn new() -> ParserElement {
+    pub fn new() -> ParserElement {
         ParserElement {
             el_type: None,
             int64: None,
@@ -21,14 +31,24 @@ impl ParserElement {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ParserElementType {
+pub enum ParserElementType {
     Int64,
     Float64,
     Var,
 }
 
+///Parser is initialised once using [new](#method.new) for each string you wish to parse.<br />
+///Then it is passed through all the parser functions you have defined<br />
+///This is the current 'state' of the parser at any one time during its passage through all the parser functions
+///- input_original: always contains the initial string supplied to [new](#method.new)
+///- input_remaining: is the current state of the remaining string to be parsed, as it passes through each parser function
+///- output: is a vec of ParserElements
+///- chomp: is the sub-string built up by a subgroup of parser functions.<br />
+///  It can be cleared manually with [chomp_clear](#method.chomp_clear) and is usually used to build some fragment of a string for e.g. a variable name
+///- success: is set to true or false by the current parser function. Currently, if a fail occurs, it is passed through all functions until the last one<br />
+///  (TODO) usse Results, and Panic during main parser functions
 #[derive(Debug, Clone)]
-struct Parser {
+pub struct Parser {
     input_original: String,
     input_remaining: String,
     output: Vec<ParserElement>,
@@ -36,8 +56,10 @@ struct Parser {
     success: bool,
 }
 
+/// ## Main Methods
 impl Parser {
-    fn new(input_string: &str) -> Parser {
+    ///Initialises a new parser with the string you wish to parse
+    pub fn new(input_string: &str) -> Parser {
         Parser {
             input_original: input_string.to_string(),
             input_remaining: input_string.to_string(),
@@ -47,18 +69,46 @@ impl Parser {
         }
     }
 
-    //MAIN PARSER
-    fn parse(mut self: Parser) -> Parser {
+    ///Defines the parser to run, then runs it on the initialised parser from new
+    pub fn parse(mut self: Parser) -> Parser {
         while self.success && self.input_remaining.len() > 0 {
             self = self.combi_first_success_of([Parser::fn_var_assign].to_vec());
         }
         self
     }
 
-    //PRIMITIVES
+    ///Initialises and runs the supplied parser functions (as a closure) on a supplied string
+    ///
+    ///### Example
+    ///```
+    ///let my_parser = |p| rust_learning_parser_combinators::Parser::combi_first_success_of(p,[rust_learning_parser_combinators::Parser::fn_var_assign].to_vec());
+    ///let string_to_parse = "= x 123";
+    ///let parse_result = rust_learning_parser_combinators::Parser::new2(string_to_parse, my_parser);
+    ///println!("{:?}",parse_result);
+    ///```
+    pub fn new2<F>(input_string: &str, func: F) -> Parser
+    where
+        F: Fn(Parser) -> Parser,
+    {
+        let mut new_parser: Parser = Parser {
+            input_original: input_string.to_string(),
+            input_remaining: input_string.to_string(),
+            chomp: "".to_string(),
+            output: Vec::<ParserElement>::new(),
+            success: true,
+        };
+        while new_parser.success && new_parser.input_remaining.len() > 0 {
+            new_parser = func(new_parser);
+        }
+        new_parser
+    }
+}
 
-    fn prim_word(mut self: Parser, expected: &str) -> Parser {
-        //any series of prim_characters, in the "expected" string
+/// ## Parser primitives
+/// they don't Panic at an error -  but can return an error in case you need to capture that for parsing in a [Parser Combinator](#parser-combinators)
+impl Parser {
+    /// Matches any series of [prim_car](#method.prim_char) in the supplied 'expected' string
+    pub fn prim_word(mut self: Parser, expected: &str) -> Parser {
         if self.success {
             match self.clone().input_remaining.get(0..expected.len()) {
                 Some(next) if next == expected => {
@@ -77,8 +127,8 @@ impl Parser {
         }
     }
 
-    fn prim_char(mut self: Parser) -> Parser {
-        //a prim_character, excluding ' '(space)
+    /// Matches any unicode character except whitespace '&nbsp;'
+    pub fn prim_char(mut self: Parser) -> Parser {
         if self.success {
             match self.clone().input_remaining.graphemes(true).next() {
                 Some(next) => {
@@ -102,8 +152,8 @@ impl Parser {
         }
     }
 
-    fn prim_digit(mut self: Parser) -> Parser {
-        //a single prim_digit 0,1,2,3,4,5,6,7,8,9
+    /// Matches a single digit 0,1,2,3,4,5,6,7,8,9
+    pub fn prim_digit(mut self: Parser) -> Parser {
         if self.success {
             match self.input_remaining.chars().next() {
                 Some(next) if next.is_digit(10) => {
@@ -122,8 +172,8 @@ impl Parser {
         }
     }
 
-    fn prim_eol(mut self: Parser) -> Parser {
-        //\r\n or \n
+    /// Matches [a combination of one or more of](#method.combi_one_or_more_of) a single \r\n or \n
+    pub fn prim_eol(mut self: Parser) -> Parser {
         if self.success {
             let newline1 = self
                 .clone()
@@ -144,9 +194,8 @@ impl Parser {
         }
     }
 
-    fn prim_eof(mut self: Parser) -> Parser {
-        //check for an empty string...
-
+    ///Matches if you've reached the end of the parsed string, i.e. check for an empty string at this stage of the parser...
+    pub fn prim_eof(mut self: Parser) -> Parser {
         if self.success && self.input_remaining.len() == 0 {
             self
         } else {
@@ -155,18 +204,20 @@ impl Parser {
         }
     }
 
-    fn prim_eols_or_eof(self: Parser) -> Parser {
+    ///Matches either (prim_eols)[#method.prim_eols] or (prim_eof)[#method.prim_eof]
+    pub fn prim_eols_or_eof(self: Parser) -> Parser {
         if self.success {
             self.combi_first_success_of([Parser::prim_eol, Parser::prim_eof].to_vec())
         } else {
             self
         }
     }
-
-    //COMBINATORS
-
-    fn combi_one_or_more_of<F>(mut self: Parser, func: F) -> Parser
-    //either one or multiple of any parser
+}
+/// ## Parser combinators
+/// they will (TODO) Panic at an error -  used to combine multiple [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators)
+impl Parser {
+    ///Matches either one, or multiple of any one parser or combinator of parsers
+    pub fn combi_one_or_more_of<F>(mut self: Parser, func: F) -> Parser
     where
         F: Fn(Parser) -> Parser,
     {
@@ -186,10 +237,8 @@ impl Parser {
             self
         }
     }
-
-    fn combi_zero_or_more_of<F>(mut self: Parser, func: F) -> Parser
-    //always succeeds
-    //either zero, one or multiple of any parser
+    ///Matches either zero, one or multiple of any [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators). Beware, it will always succeed!
+    pub fn combi_zero_or_more_of<F>(mut self: Parser, func: F) -> Parser
     where
         F: Fn(Parser) -> Parser,
     {
@@ -204,9 +253,8 @@ impl Parser {
         }
     }
 
-    fn combi_optional<F>(mut self: Parser, func: F) -> Parser
-    //always succeeds
-    //either 1 or zero of any parser
+    ///Matches either one or zero of any [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators). Beware, it will always succeed!
+    pub fn combi_optional<F>(mut self: Parser, func: F) -> Parser
     where
         F: Fn(Parser) -> Parser,
     {
@@ -219,7 +267,10 @@ impl Parser {
         }
     }
 
-    fn combi_first_success_of<F>(mut self: Parser, funcs: Vec<F>) -> Parser
+    ///Tries to match one of the parsers supplied in an array (vec) of [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators).
+    ///
+    ///It matches in the order supplied
+    pub fn combi_first_success_of<F>(mut self: Parser, funcs: Vec<F>) -> Parser
     where
         F: Fn(Parser) -> Parser,
     {
@@ -236,14 +287,20 @@ impl Parser {
             return self;
         };
     }
-
-    //HELPERS
-    fn chomp_clear(mut self: Parser) -> Parser {
+}
+/// ## Helper functions
+impl Parser {
+    ///Clears the current `chomp` value back to an empty string
+    pub fn chomp_clear(mut self: Parser) -> Parser {
         self.chomp = "".to_string();
         self
     }
 
-    fn get_el_var(self: Parser, var_name: &str) -> Result<(usize, ParserElement), &str> {
+    ///Finds a variable by name if the parser created it already<br/>
+    ///Result...<br/>
+    ///Ok(index of the found variable within the parser.output, and the variable[ParserElement](struct.ParserElement.html)<br/>
+    ///Err("Not found")
+    pub fn get_el_var(self: Parser, var_name: &str) -> Result<(usize, ParserElement), &str> {
         let mut found = Err("Not found");
         for (i, el) in self.output.iter().enumerate() {
             if el.el_type == Some(ParserElementType::Var)
@@ -254,11 +311,12 @@ impl Parser {
         }
         found
     }
+}
+/// ## Elements
 
-    //ELEMENTS/VALUES
-
-    fn el_int(mut self: Parser) -> Parser {
-        //integer number, e.g. 12 or -123456
+impl Parser {
+    ///integer number, e.g. 12 or -123456
+    pub fn el_int(mut self: Parser) -> Parser {
         if self.success {
             self = self
                 .combi_optional(|s: Parser| Parser::prim_word(s, "-"))
@@ -280,7 +338,7 @@ impl Parser {
         }
     }
 
-    fn el_float(mut self: Parser) -> Parser {
+    pub fn el_float(mut self: Parser) -> Parser {
         //floating point number, e.g. 12.34 or -123.45
         if self.success {
             self = self
@@ -305,7 +363,7 @@ impl Parser {
         }
     }
 
-    fn el_var(mut self: Parser) -> Parser {
+    pub fn el_var(mut self: Parser) -> Parser {
         //el_var name of prim_chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
         self = self.combi_one_or_more_of(Parser::prim_char).prim_word(" ");
         if self.success {
@@ -324,7 +382,7 @@ impl Parser {
 
     //FUNCTIONS
 
-    fn fn_var_assign(mut self: Parser) -> Parser {
+    pub fn fn_var_assign(mut self: Parser) -> Parser {
         //equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
         let temp_self = self
             .clone()
@@ -386,7 +444,7 @@ impl Parser {
         }
     }
 
-    fn fn_var_sum(mut self: Parser) -> Parser {
+    pub fn fn_var_sum(mut self: Parser) -> Parser {
         //plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
         let mut original_self = self.clone();
         let without_brackets = self
@@ -472,37 +530,20 @@ mod tests {
     //print x
     //= y + 1.1 2.2
     //print y
-
-    /*
-    map?
-    pred?
-    and_then?
-    parse
-    the_letter_a
-    match_literal
-    identifier
-    pair
-    left
-    right
-    one_or_more
-    zero_or_more
-    any_prim_char
-    whitespace_prim_char
-    space_one_or_more
-    space_zero_or_more
-    quoted_string
-    attribute_pair
-    attributes
-    element_start
-    single_element
-    open_element
-    either
-    element
-    close_element
-    parent_element
-    whitespace_wrap
-    */
-
+    #[test]
+    fn test_run2() {
+        let func = |p| Parser::combi_first_success_of(p, [Parser::fn_var_assign].to_vec());
+        let input_str = "= x 123";
+        let result = Parser::new2(input_str, func);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(123));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+    }
     #[test]
     fn test_variable_sum() {
         //not a valid el_var sum

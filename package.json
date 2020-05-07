@@ -4,10 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "test_and_docs": "npm run watch_fmt_test && npm run watch_docs",
     "watch_fmt_test": "cargo watch -x test",
     "watch_fmt_test_backtrace": "set RUST_BACKTRACE=1 && cargo watch -x test",
     "watch_fmt_test_no_capture": "cargo watch -x \"test -- --nocapture\"",
-    "docs": "cargo doc --document-private-items --open"
+    "watch_docs": "cargo watch -x \"doc --no-deps\"",
+    "docs": "cargo doc --target-dir docs --no-deps"
   },
   "repository": {
     "type": "git",
