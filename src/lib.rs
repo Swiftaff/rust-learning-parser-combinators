@@ -1,5 +1,465 @@
+use std::cmp::PartialEq;
+use unicode_segmentation::UnicodeSegmentation;
+
+#[derive(Debug, Clone)]
+struct ParserElement {
+    el_type: Option<ParserElementType>,
+    int64: Option<i64>,
+    float64: Option<f64>,
+    var_name: Option<String>,
+}
+
+impl ParserElement {
+    fn new() -> ParserElement {
+        ParserElement {
+            el_type: None,
+            int64: None,
+            float64: None,
+            var_name: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ParserElementType {
+    Int64,
+    Float64,
+    Var,
+}
+
+#[derive(Debug, Clone)]
+struct Parser {
+    input_original: String,
+    input_remaining: String,
+    output: Vec<ParserElement>,
+    chomp: String,
+    success: bool,
+}
+
+impl Parser {
+    fn new(input_string: &str) -> Parser {
+        Parser {
+            input_original: input_string.to_string(),
+            input_remaining: input_string.to_string(),
+            chomp: "".to_string(),
+            output: Vec::<ParserElement>::new(),
+            success: true,
+        }
+    }
+
+    //MAIN PARSER
+    fn parse(mut self: Parser) -> Parser {
+        while self.success && self.input_remaining.len() > 0 {
+            self = self.combi_first_success_of([Parser::fn_var_assign].to_vec());
+        }
+        self
+    }
+
+    //PRIMITIVES
+
+    fn prim_word(mut self: Parser, expected: &str) -> Parser {
+        //any series of prim_characters, in the "expected" string
+        if self.success {
+            match self.clone().input_remaining.get(0..expected.len()) {
+                Some(next) if next == expected => {
+                    self.input_remaining = self.input_remaining[expected.len()..].to_string();
+                    self.chomp += next;
+                    self.success = true;
+                    self
+                }
+                _ => {
+                    self.success = false;
+                    self
+                }
+            }
+        } else {
+            self
+        }
+    }
+
+    fn prim_char(mut self: Parser) -> Parser {
+        //a prim_character, excluding ' '(space)
+        if self.success {
+            match self.clone().input_remaining.graphemes(true).next() {
+                Some(next) => {
+                    if next == " " {
+                        self.success = false;
+                        self
+                    } else {
+                        self.input_remaining = self.input_remaining[next.len()..].to_string();
+                        self.chomp += next;
+                        self.success = true;
+                        self
+                    }
+                }
+                _ => {
+                    self.success = false;
+                    self
+                }
+            }
+        } else {
+            self
+        }
+    }
+
+    fn prim_digit(mut self: Parser) -> Parser {
+        //a single prim_digit 0,1,2,3,4,5,6,7,8,9
+        if self.success {
+            match self.input_remaining.chars().next() {
+                Some(next) if next.is_digit(10) => {
+                    self.input_remaining = self.input_remaining[next.len_utf8()..].to_string();
+                    self.chomp += next.encode_utf8(&mut [0; 1]);
+                    self.success = true;
+                    self
+                }
+                _ => {
+                    self.success = false;
+                    self
+                }
+            }
+        } else {
+            self
+        }
+    }
+
+    fn prim_eol(mut self: Parser) -> Parser {
+        //\r\n or \n
+        if self.success {
+            let newline1 = self
+                .clone()
+                .combi_one_or_more_of(|s| Parser::prim_word(s, "\r\n"));
+            let newline2 = self
+                .clone()
+                .combi_one_or_more_of(|s| Parser::prim_word(s, "\n"));
+            if newline1.success {
+                newline1
+            } else if newline2.success {
+                newline2
+            } else {
+                self.success = false;
+                self
+            }
+        } else {
+            self
+        }
+    }
+
+    fn prim_eof(mut self: Parser) -> Parser {
+        //check for an empty string...
+
+        if self.success && self.input_remaining.len() == 0 {
+            self
+        } else {
+            self.success = false;
+            self
+        }
+    }
+
+    fn prim_eols_or_eof(self: Parser) -> Parser {
+        if self.success {
+            self.combi_first_success_of([Parser::prim_eol, Parser::prim_eof].to_vec())
+        } else {
+            self
+        }
+    }
+
+    //COMBINATORS
+
+    fn combi_one_or_more_of<F>(mut self: Parser, func: F) -> Parser
+    //either one or multiple of any parser
+    where
+        F: Fn(Parser) -> Parser,
+    {
+        if self.success {
+            let chomp = self.clone().chomp;
+            while self.success {
+                self = func(self)
+            }
+            if self.chomp == chomp {
+                self.success = false;
+                self
+            } else {
+                self.success = true;
+                self
+            }
+        } else {
+            self
+        }
+    }
+
+    fn combi_zero_or_more_of<F>(mut self: Parser, func: F) -> Parser
+    //always succeeds
+    //either zero, one or multiple of any parser
+    where
+        F: Fn(Parser) -> Parser,
+    {
+        if self.success {
+            while self.success {
+                self = func(self)
+            }
+            self.success = true;
+            self
+        } else {
+            self
+        }
+    }
+
+    fn combi_optional<F>(mut self: Parser, func: F) -> Parser
+    //always succeeds
+    //either 1 or zero of any parser
+    where
+        F: Fn(Parser) -> Parser,
+    {
+        if self.success {
+            self = func(self);
+            self.success = true;
+            self
+        } else {
+            self
+        }
+    }
+
+    fn combi_first_success_of<F>(mut self: Parser, funcs: Vec<F>) -> Parser
+    where
+        F: Fn(Parser) -> Parser,
+    {
+        if self.success {
+            for func in funcs {
+                let new_self = func(self.clone());
+                if new_self.success {
+                    return new_self;
+                }
+            }
+            self.success = false;
+            return self;
+        } else {
+            return self;
+        };
+    }
+
+    //HELPERS
+    fn chomp_clear(mut self: Parser) -> Parser {
+        self.chomp = "".to_string();
+        self
+    }
+
+    fn get_el_var(self: Parser, var_name: &str) -> Result<(usize, ParserElement), &str> {
+        let mut found = Err("Not found");
+        for (i, el) in self.output.iter().enumerate() {
+            if el.el_type == Some(ParserElementType::Var)
+                && el.var_name == Some(var_name.to_string())
+            {
+                found = Ok((i, el.clone()))
+            }
+        }
+        found
+    }
+
+    //ELEMENTS/VALUES
+
+    fn el_int(mut self: Parser) -> Parser {
+        //integer number, e.g. 12 or -123456
+        if self.success {
+            self = self
+                .combi_optional(|s: Parser| Parser::prim_word(s, "-"))
+                .combi_one_or_more_of(Parser::prim_digit);
+
+            if self.success {
+                let mut el = ParserElement::new();
+                let val = self.clone().chomp.parse().unwrap();
+                el.el_type = Some(ParserElementType::Int64);
+                el.int64 = Some(val);
+                self.output.push(el);
+                self.chomp = "".to_string();
+                self
+            } else {
+                self
+            }
+        } else {
+            self
+        }
+    }
+
+    fn el_float(mut self: Parser) -> Parser {
+        //floating point number, e.g. 12.34 or -123.45
+        if self.success {
+            self = self
+                .combi_optional(|s: Parser| Parser::prim_word(s, "-"))
+                .combi_one_or_more_of(Parser::prim_digit)
+                .prim_word(".")
+                .combi_one_or_more_of(Parser::prim_digit);
+
+            if self.success {
+                let mut el = ParserElement::new();
+                let val = self.clone().chomp.parse().unwrap();
+                el.el_type = Some(ParserElementType::Float64);
+                el.float64 = Some(val);
+                self.output.push(el);
+                self.chomp = "".to_string();
+                self
+            } else {
+                self
+            }
+        } else {
+            self
+        }
+    }
+
+    fn el_var(mut self: Parser) -> Parser {
+        //el_var name of prim_chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
+        self = self.combi_one_or_more_of(Parser::prim_char).prim_word(" ");
+        if self.success {
+            let mut el = ParserElement::new();
+            let chomp = self.clone().chomp;
+            let el_var = chomp[..(chomp.len() - 1)].to_string();
+            el.el_type = Some(ParserElementType::Var);
+            el.var_name = Some(el_var);
+            self.output.push(el);
+            self.chomp = "".to_string();
+            self
+        } else {
+            self
+        }
+    }
+
+    //FUNCTIONS
+
+    fn fn_var_assign(mut self: Parser) -> Parser {
+        //equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
+        let temp_self = self
+            .clone()
+            .prim_word("= ")
+            .chomp_clear()
+            .el_var()
+            .combi_first_success_of(
+                [
+                    Parser::fn_var_sum,
+                    //el_float first so the number before . is not thought of as an el_int
+                    Parser::el_float,
+                    Parser::el_int,
+                ]
+                .to_vec(),
+            )
+            .prim_eols_or_eof();
+        if temp_self.success {
+            let mut el = ParserElement::new();
+            let variable_el = temp_self.output[temp_self.output.len() - 2].clone();
+            let value_el = temp_self.output[temp_self.output.len() - 1].clone();
+            match value_el.el_type {
+                Some(ParserElementType::Int64) => el.int64 = value_el.int64,
+                _ => el.float64 = value_el.float64,
+            }
+            el.el_type = Some(ParserElementType::Var);
+            el.var_name = variable_el.var_name;
+
+            println!("{:?}", temp_self);
+
+            //temp_self.output.remove(self.output.len() - 1);
+            //temp_self.output.remove(self.output.len() - 1);
+
+            match el.var_name.clone() {
+                Some(var_name) => {
+                    let var_exists_result = self.clone().get_el_var(&var_name);
+                    match var_exists_result {
+                        Ok((index, mut existing_var)) => {
+                            existing_var.int64 = el.int64;
+                            existing_var.float64 = el.float64;
+                            self.output[index] = existing_var;
+                        }
+                        _ => {
+                            self.input_remaining = temp_self.input_remaining;
+                            self.output.push(el);
+                            return self;
+                        }
+                    }
+                    self.input_remaining = temp_self.input_remaining;
+                    self.chomp = "".to_string();
+                    self
+                }
+                _ => {
+                    self.input_remaining = temp_self.input_remaining;
+                    return self;
+                }
+            }
+        } else {
+            temp_self
+        }
+    }
+
+    fn fn_var_sum(mut self: Parser) -> Parser {
+        //plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
+        let mut original_self = self.clone();
+        let without_brackets = self
+            .clone()
+            .prim_word("+ ")
+            .chomp_clear()
+            .combi_first_success_of([Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec())
+            .prim_word(" ")
+            .chomp_clear()
+            .combi_first_success_of(
+                [Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
+            );
+
+        let with_brackets = self
+            .clone()
+            .prim_word("(+ ")
+            .chomp_clear()
+            .combi_first_success_of([Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec())
+            .prim_word(" ")
+            .chomp_clear()
+            .combi_first_success_of([Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec())
+            .prim_word(")");
+        if without_brackets.success {
+            self = without_brackets;
+        } else if with_brackets.success {
+            self = with_brackets;
+        } else {
+            original_self.success = false;
+            return original_self;
+        }
+
+        let mut el = ParserElement::new();
+        let variable1_el = self.output[self.output.len() - 2].clone();
+        let variable2_el = self.output[self.output.len() - 1].clone();
+        //check both values have the same element type
+        match (variable1_el.el_type, variable2_el.el_type) {
+            (Some(el1_type), Some(el2_type)) => {
+                if el1_type == el2_type {
+                    match el1_type {
+                        //if it's an el_int set the int64 of the new element to the sum of the 2 ints
+                        ParserElementType::Int64 => {
+                            match (variable1_el.int64, variable2_el.int64) {
+                                (Some(val1), Some(val2)) => {
+                                    el.int64 = Some(val1 + val2);
+                                }
+                                (_, _) => (),
+                            }
+                        }
+                        _ => match (variable1_el.float64, variable2_el.float64) {
+                            (Some(val1), Some(val2)) => {
+                                el.float64 = Some(val1 + val2);
+                            }
+                            (_, _) => (),
+                        },
+                    }
+                    el.el_type = Some(el1_type);
+                    self.output.remove(self.output.len() - 1);
+                    self.output.remove(self.output.len() - 1);
+                    self.output.push(el);
+                    self.chomp = "".to_string();
+                    self
+                } else {
+                    self
+                }
+            }
+            (_, _) => self,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
 
     //el_int
@@ -12,8 +472,7 @@ mod tests {
     //print x
     //= y + 1.1 2.2
     //print y
-    use std::cmp::PartialEq;
-    use unicode_segmentation::UnicodeSegmentation;
+
     /*
     map?
     pred?
@@ -43,467 +502,6 @@ mod tests {
     parent_element
     whitespace_wrap
     */
-    #[derive(Debug, Clone)]
-    struct ParserElement {
-        el_type: Option<ParserElementType>,
-        i64: Option<i64>,
-        float64: Option<f64>,
-        var: Option<String>,
-    }
-
-    impl ParserElement {
-        fn new() -> ParserElement {
-            ParserElement {
-                el_type: None,
-                i64: None,
-                float64: None,
-                var: None,
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, PartialEq)]
-    enum ParserElementType {
-        Int64,
-        Float64,
-        Var,
-    }
-
-    #[derive(Debug, Clone)]
-    struct Parser {
-        input_original: String,
-        input_remaining: String,
-        output: Vec<ParserElement>,
-        chomp: String,
-        success: bool,
-    }
-
-    impl Parser {
-        fn new(input_string: &str) -> Parser {
-            Parser {
-                input_original: input_string.to_string(),
-                input_remaining: input_string.to_string(),
-                chomp: "".to_string(),
-                output: Vec::<ParserElement>::new(),
-                success: true,
-            }
-        }
-
-        //MAIN PARSER
-        fn parse(mut self: Parser) -> Parser {
-            while self.success && self.input_remaining.len() > 0 {
-                self = self.combi_first_success_of([Parser::fn_var_assign].to_vec());
-            }
-            self
-        }
-
-        //PRIMITIVES
-
-        fn prim_word(mut self: Parser, expected: &str) -> Parser {
-            //any series of prim_characters, in the "expected" string
-            if self.success {
-                match self.clone().input_remaining.get(0..expected.len()) {
-                    Some(next) if next == expected => {
-                        self.input_remaining = self.input_remaining[expected.len()..].to_string();
-                        self.chomp += next;
-                        self.success = true;
-                        self
-                    }
-                    _ => {
-                        self.success = false;
-                        self
-                    }
-                }
-            } else {
-                self
-            }
-        }
-
-        fn prim_char(mut self: Parser) -> Parser {
-            //a prim_character, excluding ' '(space)
-            if self.success {
-                match self.clone().input_remaining.graphemes(true).next() {
-                    Some(next) => {
-                        if next == " " {
-                            self.success = false;
-                            self
-                        } else {
-                            self.input_remaining = self.input_remaining[next.len()..].to_string();
-                            self.chomp += next;
-                            self.success = true;
-                            self
-                        }
-                    }
-                    _ => {
-                        self.success = false;
-                        self
-                    }
-                }
-            } else {
-                self
-            }
-        }
-
-        fn prim_digit(mut self: Parser) -> Parser {
-            //a single prim_digit 0,1,2,3,4,5,6,7,8,9
-            if self.success {
-                match self.input_remaining.chars().next() {
-                    Some(next) if next.is_digit(10) => {
-                        self.input_remaining = self.input_remaining[next.len_utf8()..].to_string();
-                        self.chomp += next.encode_utf8(&mut [0; 1]);
-                        self.success = true;
-                        self
-                    }
-                    _ => {
-                        self.success = false;
-                        self
-                    }
-                }
-            } else {
-                self
-            }
-        }
-
-        fn prim_eol(mut self: Parser) -> Parser {
-            //\r\n or \n
-            if self.success {
-                let newline1 = self
-                    .clone()
-                    .combi_one_or_more_of(|s| Parser::prim_word(s, "\r\n"));
-                let newline2 = self
-                    .clone()
-                    .combi_one_or_more_of(|s| Parser::prim_word(s, "\n"));
-                if newline1.success {
-                    newline1
-                } else if newline2.success {
-                    newline2
-                } else {
-                    self.success = false;
-                    self
-                }
-            } else {
-                self
-            }
-        }
-
-        fn prim_eof(mut self: Parser) -> Parser {
-            //check for an empty string...
-
-            if self.success && self.input_remaining.len() == 0 {
-                self
-            } else {
-                self.success = false;
-                self
-            }
-        }
-
-        fn prim_eols_or_eof(self: Parser) -> Parser {
-            if self.success {
-                self.combi_first_success_of([Parser::prim_eol, Parser::prim_eof].to_vec())
-            } else {
-                self
-            }
-        }
-
-        //COMBINATORS
-
-        fn combi_one_or_more_of<F>(mut self: Parser, func: F) -> Parser
-        //either one or multiple of any parser
-        where
-            F: Fn(Parser) -> Parser,
-        {
-            if self.success {
-                let chomp = self.clone().chomp;
-                while self.success {
-                    self = func(self)
-                }
-                if self.chomp == chomp {
-                    self.success = false;
-                    self
-                } else {
-                    self.success = true;
-                    self
-                }
-            } else {
-                self
-            }
-        }
-
-        fn combi_zero_or_more_of<F>(mut self: Parser, func: F) -> Parser
-        //always succeeds
-        //either zero, one or multiple of any parser
-        where
-            F: Fn(Parser) -> Parser,
-        {
-            if self.success {
-                while self.success {
-                    self = func(self)
-                }
-                self.success = true;
-                self
-            } else {
-                self
-            }
-        }
-
-        fn combi_optional<F>(mut self: Parser, func: F) -> Parser
-        //always succeeds
-        //either 1 or zero of any parser
-        where
-            F: Fn(Parser) -> Parser,
-        {
-            if self.success {
-                self = func(self);
-                self.success = true;
-                self
-            } else {
-                self
-            }
-        }
-
-        fn combi_first_success_of<F>(mut self: Parser, funcs: Vec<F>) -> Parser
-        where
-            F: Fn(Parser) -> Parser,
-        {
-            if self.success {
-                for func in funcs {
-                    let new_self = func(self.clone());
-                    if new_self.success {
-                        return new_self;
-                    }
-                }
-                self.success = false;
-                return self;
-            } else {
-                return self;
-            };
-        }
-
-        //HELPERS
-        fn chomp_clear(mut self: Parser) -> Parser {
-            self.chomp = "".to_string();
-            self
-        }
-
-        fn get_el_var(self: Parser, var_name: &str) -> Result<(usize, ParserElement), &str> {
-            let mut found = Err("Not found");
-            for (i, el) in self.output.iter().enumerate() {
-                if el.el_type == Some(ParserElementType::Var)
-                    && el.var == Some(var_name.to_string())
-                {
-                    found = Ok((i, el.clone()))
-                }
-            }
-            found
-        }
-
-        //ELEMENTS/VALUES
-
-        fn el_int(mut self: Parser) -> Parser {
-            //integer number, e.g. 12 or -123456
-            if self.success {
-                self = self
-                    .combi_optional(|s: Parser| Parser::prim_word(s, "-"))
-                    .combi_one_or_more_of(Parser::prim_digit);
-
-                if self.success {
-                    let mut el = ParserElement::new();
-                    let val = self.clone().chomp.parse().unwrap();
-                    el.el_type = Some(ParserElementType::Int64);
-                    el.i64 = Some(val);
-                    self.output.push(el);
-                    self.chomp = "".to_string();
-                    self
-                } else {
-                    self
-                }
-            } else {
-                self
-            }
-        }
-
-        fn el_float(mut self: Parser) -> Parser {
-            //floating point number, e.g. 12.34 or -123.45
-            if self.success {
-                self = self
-                    .combi_optional(|s: Parser| Parser::prim_word(s, "-"))
-                    .combi_one_or_more_of(Parser::prim_digit)
-                    .prim_word(".")
-                    .combi_one_or_more_of(Parser::prim_digit);
-
-                if self.success {
-                    let mut el = ParserElement::new();
-                    let val = self.clone().chomp.parse().unwrap();
-                    el.el_type = Some(ParserElementType::Float64);
-                    el.float64 = Some(val);
-                    self.output.push(el);
-                    self.chomp = "".to_string();
-                    self
-                } else {
-                    self
-                }
-            } else {
-                self
-            }
-        }
-
-        fn el_var(mut self: Parser) -> Parser {
-            //el_var name of prim_chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
-            self = self.combi_one_or_more_of(Parser::prim_char).prim_word(" ");
-            if self.success {
-                let mut el = ParserElement::new();
-                let chomp = self.clone().chomp;
-                let el_var = chomp[..(chomp.len() - 1)].to_string();
-                el.el_type = Some(ParserElementType::Var);
-                el.var = Some(el_var);
-                self.output.push(el);
-                self.chomp = "".to_string();
-                self
-            } else {
-                self
-            }
-        }
-
-        //FUNCTIONS
-
-        fn fn_var_assign(mut self: Parser) -> Parser {
-            //equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
-            let temp_self = self
-                .clone()
-                .prim_word("= ")
-                .chomp_clear()
-                .el_var()
-                .combi_first_success_of(
-                    [
-                        Parser::fn_var_sum,
-                        //el_float first so the number before . is not thought of as an el_int
-                        Parser::el_float,
-                        Parser::el_int,
-                    ]
-                    .to_vec(),
-                )
-                .prim_eols_or_eof();
-            if temp_self.success {
-                let mut el = ParserElement::new();
-                let variable_el = temp_self.output[temp_self.output.len() - 2].clone();
-                let value_el = temp_self.output[temp_self.output.len() - 1].clone();
-                match value_el.el_type {
-                    Some(ParserElementType::Int64) => el.i64 = value_el.i64,
-                    _ => el.float64 = value_el.float64,
-                }
-                el.el_type = Some(ParserElementType::Var);
-                el.var = variable_el.var;
-
-                println!("{:?}", temp_self);
-
-                //temp_self.output.remove(self.output.len() - 1);
-                //temp_self.output.remove(self.output.len() - 1);
-
-                match el.var.clone() {
-                    Some(var_name) => {
-                        let var_exists_result = self.clone().get_el_var(&var_name);
-                        match var_exists_result {
-                            Ok((index, mut existing_var)) => {
-                                existing_var.i64 = el.i64;
-                                existing_var.float64 = el.float64;
-                                self.output[index] = existing_var;
-                            }
-                            _ => {
-                                self.input_remaining = temp_self.input_remaining;
-                                self.output.push(el);
-                                return self;
-                            }
-                        }
-                        self.input_remaining = temp_self.input_remaining;
-                        self.chomp = "".to_string();
-                        self
-                    }
-                    _ => {
-                        self.input_remaining = temp_self.input_remaining;
-                        return self;
-                    }
-                }
-            } else {
-                temp_self
-            }
-        }
-
-        fn fn_var_sum(mut self: Parser) -> Parser {
-            //plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
-            let mut original_self = self.clone();
-            let without_brackets = self
-                .clone()
-                .prim_word("+ ")
-                .chomp_clear()
-                .combi_first_success_of(
-                    [Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
-                )
-                .prim_word(" ")
-                .chomp_clear()
-                .combi_first_success_of(
-                    [Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
-                );
-
-            let with_brackets = self
-                .clone()
-                .prim_word("(+ ")
-                .chomp_clear()
-                .combi_first_success_of(
-                    [Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
-                )
-                .prim_word(" ")
-                .chomp_clear()
-                .combi_first_success_of(
-                    [Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
-                )
-                .prim_word(")");
-            if without_brackets.success {
-                self = without_brackets;
-            } else if with_brackets.success {
-                self = with_brackets;
-            } else {
-                original_self.success = false;
-                return original_self;
-            }
-
-            let mut el = ParserElement::new();
-            let variable1_el = self.output[self.output.len() - 2].clone();
-            let variable2_el = self.output[self.output.len() - 1].clone();
-            //check both values have the same element type
-            match (variable1_el.el_type, variable2_el.el_type) {
-                (Some(el1_type), Some(el2_type)) => {
-                    if el1_type == el2_type {
-                        match el1_type {
-                            //if it's an el_int set the i64 of the new element to the sum of the 2 ints
-                            ParserElementType::Int64 => {
-                                match (variable1_el.i64, variable2_el.i64) {
-                                    (Some(val1), Some(val2)) => {
-                                        el.i64 = Some(val1 + val2);
-                                    }
-                                    (_, _) => (),
-                                }
-                            }
-                            _ => match (variable1_el.float64, variable2_el.float64) {
-                                (Some(val1), Some(val2)) => {
-                                    el.float64 = Some(val1 + val2);
-                                }
-                                (_, _) => (),
-                            },
-                        }
-                        el.el_type = Some(el1_type);
-                        self.output.remove(self.output.len() - 1);
-                        self.output.remove(self.output.len() - 1);
-                        self.output.push(el);
-                        self.chomp = "".to_string();
-                        self
-                    } else {
-                        self
-                    }
-                }
-                (_, _) => self,
-            }
-        }
-    }
 
     #[test]
     fn test_variable_sum() {
@@ -523,7 +521,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Int64));
-        assert_eq!(result.output[0].i64, Some(3));
+        assert_eq!(result.output[0].int64, Some(3));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -534,7 +532,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Int64));
-        assert_eq!(result.output[0].i64, Some(3));
+        assert_eq!(result.output[0].int64, Some(3));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -545,7 +543,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Int64));
-        assert_eq!(result.output[0].i64, Some(33333));
+        assert_eq!(result.output[0].int64, Some(33333));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -556,7 +554,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Int64));
-        assert_eq!(result.output[0].i64, Some(-11111));
+        assert_eq!(result.output[0].int64, Some(-11111));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -601,26 +599,26 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 3);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(3));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(3));
         assert_eq!(result.output[1].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[1].var, Some("y".to_string()));
-        assert_eq!(result.output[1].i64, Some(7));
+        assert_eq!(result.output[1].var_name, Some("y".to_string()));
+        assert_eq!(result.output[1].int64, Some(7));
         assert_eq!(result.output[2].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[2].var, Some("z".to_string()));
+        assert_eq!(result.output[2].var_name, Some("z".to_string()));
         assert_eq!(result.output[2].float64, Some(11.0));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
-        //don't create new var if already exists, update it
+        //don't create new var_name if already exists, update it
         parser = Parser::new("= x + 1 2\r\n= x + 3 4");
         let result = parser.clone().parse();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(7));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(7));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
     }
@@ -643,8 +641,8 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(10));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(10));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -656,8 +654,8 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(10));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(10));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -669,8 +667,8 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(10));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(10));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -682,8 +680,8 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(6));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(6));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -694,8 +692,8 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(3));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(3));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -706,7 +704,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
         assert_eq!(result.output[0].float64, Some(33333.33333));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
@@ -718,8 +716,8 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(1));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(1));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -730,8 +728,8 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
-        assert_eq!(result.output[0].i64, Some(1));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
+        assert_eq!(result.output[0].int64, Some(1));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -743,10 +741,10 @@ mod tests {
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
         assert_eq!(
-            result.output[0].var,
+            result.output[0].var_name,
             Some("éxample_long_variable_name".to_string())
         );
-        assert_eq!(result.output[0].i64, Some(-123456));
+        assert_eq!(result.output[0].int64, Some(-123456));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -757,7 +755,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
         assert_eq!(result.output[0].float64, Some(1.2));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
@@ -769,7 +767,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
         assert_eq!(result.output[0].float64, Some(1.2));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
@@ -793,7 +791,7 @@ mod tests {
         assert_eq!(result.input_remaining, "= 1");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var, Some("x".to_string()));
+        assert_eq!(result.output[0].var_name, Some("x".to_string()));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -805,7 +803,7 @@ mod tests {
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
         assert_eq!(
-            result.output[0].var,
+            result.output[0].var_name,
             Some("éxample_long_variable_name".to_string())
         );
         assert_eq!(result.chomp, "");
@@ -874,7 +872,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Int64));
-        assert_eq!(result.output[0].i64, Some(12));
+        assert_eq!(result.output[0].int64, Some(12));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -885,7 +883,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Int64));
-        assert_eq!(result.output[0].i64, Some(123456));
+        assert_eq!(result.output[0].int64, Some(123456));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -896,7 +894,7 @@ mod tests {
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Int64));
-        assert_eq!(result.output[0].i64, Some(-123456));
+        assert_eq!(result.output[0].int64, Some(-123456));
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
     }
