@@ -9,7 +9,7 @@
     "watch_fmt_test_backtrace": "set RUST_BACKTRACE=1 && cargo watch -x test",
     "watch_fmt_test_no_capture": "cargo watch -x \"test -- --nocapture\"",
     "watch_docs": "cargo watch -x \"doc --no-deps\"",
-    "docs": "cargo doc --target-dir docs --no-deps"
+    "docs": "cargo doc --no-deps"
   },
   "repository": {
     "type": "git",
