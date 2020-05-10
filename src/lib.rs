@@ -1,6 +1,7 @@
 use colored::*;
 use std::cmp::PartialEq;
 use unicode_segmentation::UnicodeSegmentation;
+
 #[derive(Debug, Clone)]
 ///Usually the end result of parsing a complete individual 'thing' within the whole parsed output<br /><br />
 ///
@@ -16,6 +17,7 @@ pub struct ParserElement {
     el_type: Option<ParserElementType>,
     int64: Option<i64>,
     float64: Option<f64>,
+    string: Option<String>,
     var_name: Option<String>,
 }
 
@@ -25,6 +27,7 @@ impl ParserElement {
             el_type: None,
             int64: None,
             float64: None,
+            string: None,
             var_name: None,
         }
     }
@@ -35,8 +38,8 @@ pub enum ParserElementType {
     Int64,
     Float64,
     Var,
+    Str,
 }
-
 ///Parser is initialised once using [new](#method.new) for each string you wish to parse.<br />
 ///Then it is passed through all the parser functions you have defined<br />
 ///This is the current 'state' of the parser at any one time during its passage through all the parser functions
@@ -53,6 +56,7 @@ pub struct Parser {
     input_remaining: String,
     output: Vec<ParserElement>,
     chomp: String,
+    chomping: bool,
     success: bool,
     display_errors: bool,
 }
@@ -65,6 +69,7 @@ impl Parser {
             input_original: input_string.to_string(),
             input_remaining: input_string.to_string(),
             chomp: "".to_string(),
+            chomping: true,
             output: Vec::<ParserElement>::new(),
             success: true,
             display_errors: true,
@@ -74,7 +79,7 @@ impl Parser {
     ///Defines the parser to run, then runs it on the initialised parser from new
     pub fn parse(mut self: Parser) -> Parser {
         while self.success && self.input_remaining.len() > 0 {
-            self = self.combi_first_success_of([Parser::fn_var_assign].to_vec());
+            self = self.combi_first_success_of(&[Parser::fn_var_assign].to_vec());
         }
         self
     }
@@ -97,7 +102,7 @@ impl Parser {
     ///let my_parser = |p| {
     ///        rust_learning_parser_combinators::Parser::combi_first_success_of(
     ///            p,
-    ///            [
+    ///            &[
     ///                rust_learning_parser_combinators::Parser::fn_var_assign,
     ///                rust_learning_parser_combinators::Parser::fn_var_sum,
     ///            ]
@@ -119,13 +124,14 @@ impl Parser {
             input_original: input_string.to_string(),
             input_remaining: input_string.to_string(),
             chomp: "".to_string(),
+            chomping: true,
             output: Vec::<ParserElement>::new(),
             success: true,
             display_errors: true,
         };
-        while new_parser.success && new_parser.input_remaining.len() > 0 {
-            new_parser = func(new_parser);
-        }
+        //while new_parser.success {
+        new_parser = func(new_parser);
+        //}
         new_parser
     }
 }
@@ -157,6 +163,43 @@ impl Parser {
         }
     }
 
+    ///Matches whatever the next character is, fails if eof
+    pub fn prim_next(mut self: Parser) -> Parser {
+        if self.success {
+            self = self.prim_eof();
+            if self.success {
+                self.success = false;
+                self
+            } else {
+                match self.clone().input_remaining.graphemes(true).next() {
+                    Some(next) => {
+                        self.input_remaining = self.input_remaining[next.len()..].to_string();
+                        if self.chomping {
+                            self.chomp += next;
+                        };
+                        self.success = true;
+                        self
+                    }
+                    _ => {
+                        self.display_error("prim_next");
+                        self.success = false;
+                        self
+                    }
+                }
+            }
+        } else {
+            self
+        }
+    }
+
+    pub fn prim_quote(mut self: Parser) -> Parser {
+        let chomping_previous_flag_setting = self.chomping;
+        self.chomping = false;
+        self = self.prim_word("\"");
+        self.chomping = chomping_previous_flag_setting;
+        self
+    }
+
     /// Matches any series of [prim_car](#method.prim_char) in the supplied 'expected' string
     /// Always succeeds
     pub fn prim_word(mut self: Parser, expected: &str) -> Parser {
@@ -164,7 +207,9 @@ impl Parser {
             match self.clone().input_remaining.get(0..expected.len()) {
                 Some(next) if next == expected => {
                     self.input_remaining = self.input_remaining[expected.len()..].to_string();
-                    self.chomp += next;
+                    if self.chomping {
+                        self.chomp += next;
+                    };
                     self.success = true;
                     self
                 }
@@ -189,7 +234,9 @@ impl Parser {
                         self
                     } else {
                         self.input_remaining = self.input_remaining[next.len()..].to_string();
-                        self.chomp += next;
+                        if self.chomping {
+                            self.chomp += next;
+                        };
                         self.success = true;
                         self
                     }
@@ -212,7 +259,10 @@ impl Parser {
             match self.input_remaining.chars().next() {
                 Some(next) if next.is_digit(10) => {
                     self.input_remaining = self.input_remaining[next.len_utf8()..].to_string();
-                    self.chomp += next.encode_utf8(&mut [0; 1]);
+                    if self.chomping {
+                        self.chomp += next.encode_utf8(&mut [0; 1]);
+                    };
+
                     self.success = true;
                     self
                 }
@@ -268,7 +318,7 @@ impl Parser {
         if self.success {
             let display_errors_previous_flag_setting = self.display_errors;
             self.display_errors = false;
-            self = self.combi_first_success_of([Parser::prim_eol, Parser::prim_eof].to_vec());
+            self = self.combi_first_success_of(&[Parser::prim_eol, Parser::prim_eof].to_vec());
             if self.success {
                 self.display_errors = display_errors_previous_flag_setting;
                 self
@@ -330,6 +380,26 @@ impl Parser {
         }
     }
 
+    ///Matches either zero, one or multiple of any [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators)<br />
+    ///until it reaches the second supplied [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators)
+    pub fn combi_until_first_do_second<F>(mut self: Parser, first_and_second: Vec<F>) -> Parser
+    where
+        F: Fn(Parser) -> Parser,
+    {
+        if self.success {
+            let display_errors_previous_flag_setting = self.display_errors;
+            self.display_errors = false;
+            while self.success {
+                self = Parser::combi_first_success_of(self, &first_and_second);
+            }
+            self.display_errors = display_errors_previous_flag_setting;
+            self.success = true;
+            self
+        } else {
+            self
+        }
+    }
+
     ///Matches either one or zero of any [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators).<br />
     ///Beware, it will always succeed!
     pub fn combi_optional<F>(mut self: Parser, func: F) -> Parser
@@ -349,7 +419,7 @@ impl Parser {
     ///Tries to match one of the parsers supplied in an array (vec) of [Parser primitives](#parser-primitives) or other [Parser combinators](#parser-combinators).
     ///
     ///It matches in the order supplied
-    pub fn combi_first_success_of<F>(mut self: Parser, funcs: Vec<F>) -> Parser
+    pub fn combi_first_success_of<F>(mut self: Parser, funcs: &Vec<F>) -> Parser
     where
         F: Fn(Parser) -> Parser,
     {
@@ -399,6 +469,32 @@ impl Parser {
 /// ## Elements
 
 impl Parser {
+    ///string, e.g. "123" or "The quick brown fox jumps over the lazy dog"
+    pub fn el_str(mut self: Parser) -> Parser {
+        if self.success {
+            let display_errors_previous_flag_setting = self.display_errors;
+            self.display_errors = false;
+            self = self
+                .prim_quote()
+                .combi_until_first_do_second([Parser::prim_quote, Parser::prim_next].to_vec());
+            self.display_errors = display_errors_previous_flag_setting;
+            if self.success {
+                let mut el = ParserElement::new();
+                let val = self.clone().chomp;
+                el.el_type = Some(ParserElementType::Str);
+                el.string = Some(val);
+                self.output.push(el);
+                self = self.chomp_clear();
+                self
+            } else {
+                self.display_error("el_str");
+                self
+            }
+        } else {
+            self
+        }
+    }
+
     ///integer number, e.g. 12 or -123456
     pub fn el_int(mut self: Parser) -> Parser {
         if self.success {
@@ -414,7 +510,7 @@ impl Parser {
                 el.el_type = Some(ParserElementType::Int64);
                 el.int64 = Some(val);
                 self.output.push(el);
-                self.chomp = "".to_string();
+                self = self.chomp_clear();
                 self
             } else {
                 self.display_error("el_int");
@@ -442,7 +538,7 @@ impl Parser {
                 el.el_type = Some(ParserElementType::Float64);
                 el.float64 = Some(val);
                 self.output.push(el);
-                self.chomp = "".to_string();
+                self = self.chomp_clear();
                 self
             } else {
                 self.display_error("el_float");
@@ -465,7 +561,7 @@ impl Parser {
             el.el_type = Some(ParserElementType::Var);
             el.var_name = Some(el_var);
             self.output.push(el);
-            self.chomp = "".to_string();
+            self = self.chomp_clear();
             self.display_errors = display_errors_previous_flag_setting;
             self
         } else {
@@ -478,13 +574,13 @@ impl Parser {
 
     pub fn fn_var_assign(mut self: Parser) -> Parser {
         //equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
-        let mut temp_self = self
+        let temp_self = self
             .clone()
             .prim_word("= ")
             .chomp_clear()
             .el_var()
             .combi_first_success_of(
-                [
+                &[
                     Parser::fn_var_sum,
                     //el_float first so the number before . is not thought of as an el_int
                     Parser::el_float,
@@ -499,6 +595,7 @@ impl Parser {
             let value_el = temp_self.output[temp_self.output.len() - 1].clone();
             match value_el.el_type {
                 Some(ParserElementType::Int64) => el.int64 = value_el.int64,
+                Some(ParserElementType::Str) => el.string = value_el.string,
                 _ => el.float64 = value_el.float64,
             }
             el.el_type = Some(ParserElementType::Var);
@@ -525,7 +622,7 @@ impl Parser {
                         }
                     }
                     self.input_remaining = temp_self.input_remaining;
-                    self.chomp = "".to_string();
+                    self = self.chomp_clear();
                     self
                 }
                 _ => {
@@ -547,21 +644,27 @@ impl Parser {
             .clone()
             .prim_word("+ ")
             .chomp_clear()
-            .combi_first_success_of([Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec())
+            .combi_first_success_of(
+                &[Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
+            )
             .prim_word(" ")
             .chomp_clear()
             .combi_first_success_of(
-                [Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
+                &[Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
             );
 
         let with_brackets = self
             .clone()
             .prim_word("(+ ")
             .chomp_clear()
-            .combi_first_success_of([Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec())
+            .combi_first_success_of(
+                &[Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
+            )
             .prim_word(" ")
             .chomp_clear()
-            .combi_first_success_of([Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec())
+            .combi_first_success_of(
+                &[Parser::fn_var_sum, Parser::el_float, Parser::el_int].to_vec(),
+            )
             .prim_word(")");
 
         if without_brackets.success {
@@ -591,6 +694,16 @@ impl Parser {
                                 (_, _) => (),
                             }
                         }
+                        ParserElementType::Str => {
+                            match (variable1_el.string, variable2_el.string) {
+                                (Some(_), Some(_)) => {
+                                    self.success = false;
+                                    original_self.display_error("fn_var_sum - can't sum strings");
+                                    return self;
+                                }
+                                (_, _) => (),
+                            }
+                        }
                         _ => match (variable1_el.float64, variable2_el.float64) {
                             (Some(val1), Some(val2)) => {
                                 el.float64 = Some(val1 + val2);
@@ -602,7 +715,7 @@ impl Parser {
                     self.output.remove(self.output.len() - 1);
                     self.output.remove(self.output.len() - 1);
                     self.output.push(el);
-                    self.chomp = "".to_string();
+                    self = self.chomp_clear();
                     self
                 } else {
                     self
@@ -624,13 +737,85 @@ mod tests {
     //fn fn_var_assign (=)
     //fn fn_var_sum (+)
 
+    #[test]
+    //A string
+    fn test_el_string() {
+        let input_str = "\"1234\"";
+        let result = Parser::new2(input_str, Parser::el_str);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 1);
+        assert_eq!(result.output[0].el_type, Some(ParserElementType::Str));
+        assert_eq!(result.output[0].string, Some("1234".to_string()));
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+    }
+
+    #[test]
+    //Next
+    fn test_prim_next() {
+        //Fails
+        let input_str = "";
+        let result = Parser::new2(input_str, Parser::prim_next);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, false);
+
+        //character alpha
+        let input_str = "abc";
+        let result = Parser::new2(input_str, Parser::prim_next);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "bc");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "a");
+        assert_eq!(result.success, true);
+
+        //character number
+        let input_str = "1bc";
+        let result = Parser::new2(input_str, Parser::prim_next);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "bc");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "1");
+        assert_eq!(result.success, true);
+
+        //character special
+        let input_str = "~bc";
+        let result = Parser::new2(input_str, Parser::prim_next);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "bc");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "~");
+        assert_eq!(result.success, true);
+
+        //character backslash
+        let input_str = "\\bc";
+        let result = Parser::new2(input_str, Parser::prim_next);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "bc");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "\\");
+        assert_eq!(result.success, true);
+
+        //character unicode
+        let input_str = "ébc";
+        let result = Parser::new2(input_str, Parser::prim_next);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "bc");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "é");
+        assert_eq!(result.success, true);
+    }
+
     //= x + 1 2
     //print x
     //= y + 1.1 2.2
     //print y
     #[test]
     fn test_run2() {
-        let func = |p| Parser::combi_first_success_of(p, [Parser::fn_var_assign].to_vec());
+        let func = |p| Parser::combi_first_success_of(p, &[Parser::fn_var_assign].to_vec());
         let input_str = "= x 123";
         let result = Parser::new2(input_str, func);
         assert_eq!(result.input_original, input_str);
@@ -1298,7 +1483,7 @@ mod tests {
     fn test_prim_char() {
         //fail
         let mut parser = Parser::new("Te sting 123");
-        parser.display_errors = true;
+        parser.display_errors = false;
         let result = parser
             .clone()
             .prim_char()
@@ -1313,7 +1498,7 @@ mod tests {
 
         //succeed
         let mut parser = Parser::new("Testing 123");
-        parser.display_errors = true;
+        parser.display_errors = false;
         let result = parser
             .clone()
             .prim_char()
@@ -1329,7 +1514,7 @@ mod tests {
 
     #[test]
     fn test_prim_word() {
-        let mut parser = Parser::new("Testing 123");
+        let parser = Parser::new("Testing 123");
         let result = parser
             .clone()
             .prim_word("Test")
