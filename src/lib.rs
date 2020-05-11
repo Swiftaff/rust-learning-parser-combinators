@@ -63,6 +63,7 @@ pub struct Parser {
     input_original: String,
     input_remaining: String,
     output: Vec<ParserElement>,
+    output_aliases: Vec<ParserFunction>,
     chomp: String,
     chomping: bool,
     success: bool,
@@ -108,6 +109,15 @@ pub enum ParserElementType {
     Str,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParserFunction {
+    TakesParser(fn(Parser) -> Parser), //e.g. primitive except prim_word, element, function
+    TakesParserBStr(fn(Parser) -> Parser, String), //e.g. prim_word
+    TakesParserFn(fn(Parser) -> Parser, fn(Parser) -> Parser), //e.g. simple combinator
+    TakesParserVecFn(fn(Parser) -> Parser, Vec<fn(Parser) -> Parser>), //e.g. combi_until_first_do_second
+    TakesParserBVecFn(fn(Parser) -> Parser, Vec<fn(Parser) -> Parser>), //e.g. combi_until_first_do_second
+}
+
 /// ## Main Methods
 impl Parser {
     ///Initialises a new parser with the string you wish to parse
@@ -118,6 +128,7 @@ impl Parser {
             chomp: "".to_string(),
             chomping: true,
             output: Vec::<ParserElement>::new(),
+            output_aliases: Vec::<ParserFunction>::new(),
             success: true,
             display_errors: true,
         }
@@ -139,7 +150,7 @@ impl Parser {
     ///```
     ///let my_parser = |p| rust_learning_parser_combinators::Parser::fn_var_assign(p);
     ///let string_to_parse = "= x 123";
-    ///let parse_result = rust_learning_parser_combinators::Parser::new2(string_to_parse, my_parser);
+    ///let parse_result = rust_learning_parser_combinators::Parser::new_and_parse(string_to_parse, my_parser);
     ///println!("{:?}",parse_result);
     ///```
 
@@ -159,27 +170,46 @@ impl Parser {
     ///let string_to_parse = "
     ///= x 123
     ///= x + x 456";
-    ///let parse_result = rust_learning_parser_combinators::Parser::new2(string_to_parse, my_parser);
+    ///let parse_result = rust_learning_parser_combinators::Parser::new_and_parse(string_to_parse, my_parser);
     ///println!("{:?}",parse_result);
     ///```
 
-    pub fn new2<F>(input_string: &str, func: F) -> Parser
+    pub fn new_and_parse<F>(input_string: &str, func: F) -> Parser
     where
         F: Fn(Parser) -> Parser,
     {
-        let mut new_parser: Parser = Parser {
+        let new_parser: Parser = Parser {
             input_original: input_string.to_string(),
             input_remaining: input_string.to_string(),
             chomp: "".to_string(),
             chomping: true,
             output: Vec::<ParserElement>::new(),
+            output_aliases: Vec::<ParserFunction>::new(),
             success: true,
             display_errors: true,
         };
-        //while new_parser.success {
-        new_parser = func(new_parser);
-        //}
-        new_parser
+        func(new_parser)
+    }
+
+    pub fn new_and_parse_aliases(input_string: &str, parser_lang_string: &str) -> Parser {
+        //first, parse the parser_lang_string to get the series of your parser instructions
+        let mut parser_lang: Parser = Parser::new(parser_lang_string);
+        parser_lang = parser_lang.lang_prim_next();
+
+        //second, parse the input_string using those instructions
+        let mut parser: Parser = Parser::new(input_string);
+        for f in parser_lang.output_aliases {
+            match f {
+                ParserFunction::TakesParser(fun) => {
+                    parser = fun(parser);
+                    return parser;
+                }
+                _ => {
+                    return parser;
+                }
+            }
+        }
+        parser
     }
 
     pub fn display_error(self: &Parser, from: &str) {
@@ -226,6 +256,25 @@ impl Parser {
             }
         }
         found
+    }
+}
+
+/// ## Language Aliases
+///Functions to help decode a string of aliases of the parser functions of this module
+impl Parser {
+    pub fn lang_prim_next(mut self: Parser) -> Parser {
+        if self.success {
+            self = self.prim_word(">");
+            if self.success {
+                self.output_aliases
+                    .push(ParserFunction::TakesParser(Parser::prim_next));
+                self
+            } else {
+                self
+            }
+        } else {
+            self
+        }
     }
 }
 
@@ -615,9 +664,10 @@ impl Parser {
             self
         }
     }
+}
 
-    /// ## Parser Elements
-    ///
+/// ## Parser Functions
+impl Parser {
     ///equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
     pub fn fn_var_assign(mut self: Parser) -> Parser {
         let temp_self = self
@@ -777,10 +827,25 @@ mod tests {
     use super::*;
 
     #[test]
+    //================================================================================
+    //Language Aliases Testing
+    //================================================================================
+    fn test_lang_prim_next() {
+        let input_str = "123";
+        let language_string = ">";
+        let result = Parser::new_and_parse_aliases(input_str, language_string);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "23");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "1");
+        assert_eq!(result.success, true);
+    }
+
+    #[test]
     //A string
     fn test_el_string() {
         let input_str = "\"1234\"";
-        let result = Parser::new2(input_str, Parser::el_str);
+        let result = Parser::new_and_parse(input_str, Parser::el_str);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
@@ -795,7 +860,7 @@ mod tests {
     fn test_prim_next() {
         //Fails
         let input_str = "";
-        let result = Parser::new2(input_str, Parser::prim_next);
+        let result = Parser::new_and_parse(input_str, Parser::prim_next);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
@@ -804,7 +869,7 @@ mod tests {
 
         //character alpha
         let input_str = "abc";
-        let result = Parser::new2(input_str, Parser::prim_next);
+        let result = Parser::new_and_parse(input_str, Parser::prim_next);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "bc");
         assert_eq!(result.output.len(), 0);
@@ -813,7 +878,7 @@ mod tests {
 
         //character number
         let input_str = "1bc";
-        let result = Parser::new2(input_str, Parser::prim_next);
+        let result = Parser::new_and_parse(input_str, Parser::prim_next);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "bc");
         assert_eq!(result.output.len(), 0);
@@ -822,7 +887,7 @@ mod tests {
 
         //character special
         let input_str = "~bc";
-        let result = Parser::new2(input_str, Parser::prim_next);
+        let result = Parser::new_and_parse(input_str, Parser::prim_next);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "bc");
         assert_eq!(result.output.len(), 0);
@@ -831,7 +896,7 @@ mod tests {
 
         //character backslash
         let input_str = "\\bc";
-        let result = Parser::new2(input_str, Parser::prim_next);
+        let result = Parser::new_and_parse(input_str, Parser::prim_next);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "bc");
         assert_eq!(result.output.len(), 0);
@@ -840,7 +905,7 @@ mod tests {
 
         //character unicode
         let input_str = "ébc";
-        let result = Parser::new2(input_str, Parser::prim_next);
+        let result = Parser::new_and_parse(input_str, Parser::prim_next);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "bc");
         assert_eq!(result.output.len(), 0);
@@ -856,7 +921,7 @@ mod tests {
     fn test_run2() {
         let func = |p| Parser::combi_first_success_of(p, &[Parser::fn_var_assign].to_vec());
         let input_str = "= x 123";
-        let result = Parser::new2(input_str, func);
+        let result = Parser::new_and_parse(input_str, func);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 1);
