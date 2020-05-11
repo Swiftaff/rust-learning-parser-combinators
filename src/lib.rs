@@ -2,6 +2,73 @@ use colored::*;
 use std::cmp::PartialEq;
 use unicode_segmentation::UnicodeSegmentation;
 
+///This is a toy parser/compiler loosely taking inspiration from [Elm Parser](https://package.elm-lang.org/packages/elm/parser/latest/Parser) with the following methods so far...
+///
+///The goal is to have fun seeing if I can build a 'simple' parser syntax, similar in style Elm Parser, using the power of Rust, but without the visual/mental overhead of standard Rust code.
+///
+///Essentially, building a parser, to parse a new toy parser language
+///
+///# Examples of language syntax
+///
+/** ### Primitives (terse syntax is (mostly) 1 character)
+| Syntax | Parser Name                                  | Example Input String | Terse Syntax | (or) Written Syntax        | Example Result           |
+|--------|----------------------------------------------|----------------------|--------------|----------------------------|--------------------------|
+| >      | [prim_next](#method.prim_next)               | `1234`               | `>>`         | `(next)`                   | `12` (in Parser.chomp)   |
+| "      | [prim_quote](#method.prim_quote)             | `"test"`             | `"`          | `(quote)`                  | `\"` (in Parser.chomp)   |
+| 'word' | [prim_word](#method.prim_word)               | `testing`            | `'test'`     | `(word test)`              | `test` (in Parser.chomp) |
+| @      | [prim_char](#method.prim_char)               | `testing`            | `@@@@`       | `(char)(char)(char)(char)` | `test` (in Parser.chomp) |
+| \#     | [prim_digit](#method.prim_digit)             | `1234`               | `##`         | `(0-9)(0-9)`               | `12` (in Parser.chomp)   |
+| ,      | [prim_eol](#method.prim_eol)                 | ` `                  | `,`          | `(eols)`                   | true (in Parser.success) |
+|        |                                              | `second line`        |              |                            |                          |
+| .      | [prim_eof](#method.prim_eof)                 | ` `                  | `.`          | `(eof)`                    | true (in Parser.success) |
+| ;      | [prim_eols_or_eof](#method.prim_eols_or_eof) | ` `                  | `;`          | `(eolseof)`                | true (in Parser.success) |
+|        |                                              | ` `                  |              |                            |                          |
+|        |                                              | `third line`         |              |                            |                          |
+
+### Combinators (terse syntax is 2 characters)
+| Syntax | Parser Name                                                        | Example Input String | Terse Syntax | (or) Written Syntax         | Example Result             |
+|--------|--------------------------------------------------------------------|----------------------|--------------|-----------------------------|----------------------------|
+| 1+     | [combi_one_or_more_of](#method.combi_one_or_more_of)               | `1234test`           | `1+#`        | `(one+ (0-9))`              | `1234` (in Parser.chomp)   |
+| 0+     | [combi_zero_or_more_of](#method.combi_zero_or_more_of)             | `"test1234"`         | `0+@`        | `(zero+ (char))`            | `test` (in Parser.chomp)   |
+| !+     | [combi_until_first_do_second](#method.combi_until_first_do_second) | `testing`            | `!+'i'@`     | `(two!one (word i) (char))` | `test` (in Parser.chomp)   |
+| ??     | [combi_optional](#method.combi_optional)                           | `1test`              | `??#`        | `(option (0-9))`            | `true` (in Parser.success) |
+| []     | [combi_first_success_of](#method.combi_first_success_of)           | `1234test`           | `[# @]`      | `(0-9)(char)`               | `1` (in Parser.chomp)      |
+
+### Elements (terse syntax is 4 characters)
+| Syntax | Parser Name                   | Example Input String | Terse Syntax | (or) Written Syntax | Example Result                    |
+|--------|-------------------------------|----------------------|--------------|---------------------|-----------------------------------|
+| $str   | [el_str](#method.el_str)      | `"1234"`             | `$str`       | `(el_str)`          | `1234` (string element no name)   |
+| $int   | [el_int](#method.el_int)      | `-1234`              | `$int`       | `(el_int)`          | `-1234` (integer element no name) |
+| $flt   | [el_float](#method.el_float)  | `-123.45`            | `$flt`       | `(el_flt)`          | `-123.45` (float element no name) |
+| $var   | [el_var](#method.el_var)      | `= x "test"`         | `$var`       | `(el_var)`          | `test` (string element named `x`) |
+
+**/
+/// ### Functions (perhaps these should be in userland?)
+///[fn_var_assign (=)](#method.fn_var_assign),
+///
+///[fn_var_sum (+)](#method.fn_var_sum)
+///<br /><br />
+///Parser is initialised once using [new](#method.new) for each string you wish to parse.<br />
+///Then it is passed through all the parser functions you have defined<br />
+///This is the current 'state' of the parser at any one time during its passage through all the parser functions
+///- input_original: always contains the initial string supplied to [new](#method.new)
+///- input_remaining: is the current state of the remaining string to be parsed, as it passes through each parser function
+///- output: is a vec of ParserElements, generated by your parser functions
+///- chomp: is the sub-string built up by a subgroup of the current parser functions.<br />
+///  It can be cleared manually with [chomp_clear](#method.chomp_clear) and is usually used to build some fragment of a string for e.g. a variable name
+///- success: is set to true or false by the current parser function. Currently, if a fail occurs, it is passed through all functions until the last one<br />
+///  (TODO) use Results, and Panic during main parser functions
+#[derive(Debug, Clone)]
+pub struct Parser {
+    input_original: String,
+    input_remaining: String,
+    output: Vec<ParserElement>,
+    chomp: String,
+    chomping: bool,
+    success: bool,
+    display_errors: bool,
+}
+
 #[derive(Debug, Clone)]
 ///Usually the end result of parsing a complete individual 'thing' within the whole parsed output<br /><br />
 ///
@@ -39,26 +106,6 @@ pub enum ParserElementType {
     Float64,
     Var,
     Str,
-}
-///Parser is initialised once using [new](#method.new) for each string you wish to parse.<br />
-///Then it is passed through all the parser functions you have defined<br />
-///This is the current 'state' of the parser at any one time during its passage through all the parser functions
-///- input_original: always contains the initial string supplied to [new](#method.new)
-///- input_remaining: is the current state of the remaining string to be parsed, as it passes through each parser function
-///- output: is a vec of ParserElements, generated by your parser functions
-///- chomp: is the sub-string built up by a subgroup of the current parser functions.<br />
-///  It can be cleared manually with [chomp_clear](#method.chomp_clear) and is usually used to build some fragment of a string for e.g. a variable name
-///- success: is set to true or false by the current parser function. Currently, if a fail occurs, it is passed through all functions until the last one<br />
-///  (TODO) use Results, and Panic during main parser functions
-#[derive(Debug, Clone)]
-pub struct Parser {
-    input_original: String,
-    input_remaining: String,
-    output: Vec<ParserElement>,
-    chomp: String,
-    chomping: bool,
-    success: bool,
-    display_errors: bool,
 }
 
 /// ## Main Methods
@@ -134,11 +181,7 @@ impl Parser {
         //}
         new_parser
     }
-}
 
-/// ## Parser primitives
-/// they don't Panic at an error -  but can return an error in case you need to capture that for parsing in a [Parser Combinator](#parser-combinators)
-impl Parser {
     pub fn display_error(self: &Parser, from: &str) {
         //only display a short 100 char excerpt of remaining string
         let mut length = self.input_remaining.len();
@@ -163,6 +206,32 @@ impl Parser {
         }
     }
 
+    ///Clears the current `chomp` value back to an empty string
+    pub fn chomp_clear(mut self: Parser) -> Parser {
+        self.chomp = "".to_string();
+        self
+    }
+
+    ///Finds a variable by name if the parser created it already<br/>
+    ///Result...<br/>
+    ///Ok(index of the found variable within the parser.output, and the variable[ParserElement](struct.ParserElement.html)<br/>
+    ///Err("Not found")
+    pub fn get_el_var(self: Parser, var_name: &str) -> Result<(usize, ParserElement), &str> {
+        let mut found = Err("Not found");
+        for (i, el) in self.output.iter().enumerate() {
+            if el.el_type == Some(ParserElementType::Var)
+                && el.var_name == Some(var_name.to_string())
+            {
+                found = Ok((i, el.clone()))
+            }
+        }
+        found
+    }
+}
+
+/// ## Parser primitives
+/// they don't Panic at an error -  but can return an error in case you need to capture that for parsing in a [Parser Combinator](#parser-combinators)
+impl Parser {
     ///Matches whatever the next character is, fails if eof
     pub fn prim_next(mut self: Parser) -> Parser {
         if self.success {
@@ -442,31 +511,8 @@ impl Parser {
         };
     }
 }
-/// ## Helper functions
-impl Parser {
-    ///Clears the current `chomp` value back to an empty string
-    pub fn chomp_clear(mut self: Parser) -> Parser {
-        self.chomp = "".to_string();
-        self
-    }
 
-    ///Finds a variable by name if the parser created it already<br/>
-    ///Result...<br/>
-    ///Ok(index of the found variable within the parser.output, and the variable[ParserElement](struct.ParserElement.html)<br/>
-    ///Err("Not found")
-    pub fn get_el_var(self: Parser, var_name: &str) -> Result<(usize, ParserElement), &str> {
-        let mut found = Err("Not found");
-        for (i, el) in self.output.iter().enumerate() {
-            if el.el_type == Some(ParserElementType::Var)
-                && el.var_name == Some(var_name.to_string())
-            {
-                found = Ok((i, el.clone()))
-            }
-        }
-        found
-    }
-}
-/// ## Elements
+/// ## Parser Elements
 
 impl Parser {
     ///string, e.g. "123" or "The quick brown fox jumps over the lazy dog"
@@ -521,8 +567,8 @@ impl Parser {
         }
     }
 
+    ///floating point number, e.g. 12.34 or -123.45
     pub fn el_float(mut self: Parser) -> Parser {
-        //floating point number, e.g. 12.34 or -123.45
         if self.success {
             let display_errors_previous_flag_setting = self.display_errors;
             self.display_errors = false;
@@ -549,8 +595,8 @@ impl Parser {
         }
     }
 
+    ///el_var name of prim_chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
     pub fn el_var(mut self: Parser) -> Parser {
-        //el_var name of prim_chars followed by a space, e.g. "x" or "lö̲ng_variablé_name"
         self = self.combi_one_or_more_of(Parser::prim_char).prim_word(" ");
         if self.success {
             let display_errors_previous_flag_setting = self.display_errors;
@@ -570,10 +616,10 @@ impl Parser {
         }
     }
 
-    //FUNCTIONS
-
+    /// ## Parser Elements
+    ///
+    ///equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
     pub fn fn_var_assign(mut self: Parser) -> Parser {
-        //equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
         let temp_self = self
             .clone()
             .prim_word("= ")
@@ -637,8 +683,8 @@ impl Parser {
         }
     }
 
+    ///plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
     pub fn fn_var_sum(mut self: Parser) -> Parser {
-        //plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
         let mut original_self = self.clone();
         let without_brackets = self
             .clone()
@@ -729,13 +775,6 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    //Referring to https://package.elm-lang.org/packages/elm/parser/latest/Parser
-
-    //el_int
-    //el_float
-    //el_var
-    //fn fn_var_assign (=)
-    //fn fn_var_sum (+)
 
     #[test]
     //A string
