@@ -18,7 +18,7 @@ use unicode_segmentation::UnicodeSegmentation;
 | 'word' | [prim_word](#method.prim_word)               | `testing`            | `'test'`     | `(word test)`              | `test` (in Parser.chomp) |
 | @      | [prim_char](#method.prim_char)               | `testing`            | `@@@@`       | `(char)(char)(char)(char)` | `test` (in Parser.chomp) |
 | \#     | [prim_digit](#method.prim_digit)             | `1234`               | `##`         | `(0-9)(0-9)`               | `12` (in Parser.chomp)   |
-| ,      | [prim_eol](#method.prim_eol)                 | ` `                  | `,`          | `(eols)`                   | true (in Parser.success) |
+| ,      | [prim_eols](#method.prim_eols)                 | ` `                  | `,`          | `(eols)`                   | true (in Parser.success) |
 |        |                                              | `second line`        |              |                            |                          |
 | .      | [prim_eof](#method.prim_eof)                 | ` `                  | `.`          | `(eof)`                    | true (in Parser.success) |
 | ;      | [prim_eols_or_eof](#method.prim_eols_or_eof) | ` `                  | `;`          | `(eolseof)`                | true (in Parser.success) |
@@ -194,7 +194,18 @@ impl Parser {
     pub fn new_and_parse_aliases(input_string: &str, parser_lang_string: &str) -> Parser {
         //first, parse the parser_lang_string to get the series of your parser instructions
         let mut parser_lang: Parser = Parser::new(parser_lang_string);
-        parser_lang = parser_lang.lang_prim_next();
+        while parser_lang.success && parser_lang.input_remaining.len() > 0 {
+            parser_lang = parser_lang.combi_first_success_of(
+                &[
+                    Parser::lang_prim_eols,
+                    Parser::lang_prim_quote,
+                    Parser::lang_prim_digit,
+                    Parser::lang_prim_char,
+                    Parser::lang_prim_next,
+                ]
+                .to_vec(),
+            );
+        }
 
         //second, parse the input_string using those instructions
         let mut parser: Parser = Parser::new(input_string);
@@ -202,7 +213,6 @@ impl Parser {
             match f {
                 ParserFunction::TakesParser(fun) => {
                     parser = fun(parser);
-                    return parser;
                 }
                 _ => {
                     return parser;
@@ -262,12 +272,15 @@ impl Parser {
 /// ## Language Aliases
 ///Functions to help decode a string of aliases of the parser functions of this module
 impl Parser {
-    pub fn lang_prim_next(mut self: Parser) -> Parser {
+    pub fn lang_prim_factory(
+        mut self: Parser,
+        word: &str,
+        parser_function: ParserFunction,
+    ) -> Parser {
         if self.success {
-            self = self.prim_word(">");
+            self = self.prim_word(word);
             if self.success {
-                self.output_aliases
-                    .push(ParserFunction::TakesParser(Parser::prim_next));
+                self.output_aliases.push(parser_function);
                 self
             } else {
                 self
@@ -275,6 +288,26 @@ impl Parser {
         } else {
             self
         }
+    }
+
+    pub fn lang_prim_next(self: Parser) -> Parser {
+        Parser::lang_prim_factory(self, ">", ParserFunction::TakesParser(Parser::prim_next))
+    }
+
+    pub fn lang_prim_quote(self: Parser) -> Parser {
+        Parser::lang_prim_factory(self, "\"", ParserFunction::TakesParser(Parser::prim_quote))
+    }
+
+    pub fn lang_prim_char(self: Parser) -> Parser {
+        Parser::lang_prim_factory(self, "@", ParserFunction::TakesParser(Parser::prim_char))
+    }
+
+    pub fn lang_prim_digit(self: Parser) -> Parser {
+        Parser::lang_prim_factory(self, "#", ParserFunction::TakesParser(Parser::prim_digit))
+    }
+
+    pub fn lang_prim_eols(self: Parser) -> Parser {
+        Parser::lang_prim_factory(self, ",", ParserFunction::TakesParser(Parser::prim_eols))
     }
 }
 
@@ -397,7 +430,7 @@ impl Parser {
     }
 
     /// Matches [a combination of one or more of](#method.combi_one_or_more_of) a single \r\n or \n
-    pub fn prim_eol(mut self: Parser) -> Parser {
+    pub fn prim_eols(mut self: Parser) -> Parser {
         if self.success {
             let newline1 = self
                 .clone()
@@ -411,11 +444,11 @@ impl Parser {
                 newline2
             } else {
                 self.success = false;
-                self.display_error("prim_eol");
+                self.display_error("prim_eols");
                 self
             }
         } else {
-            self.display_error("prim_eol");
+            self.display_error("prim_eols");
             self
         }
     }
@@ -431,12 +464,12 @@ impl Parser {
         }
     }
 
-    ///Matches either (prim_eols)[#method.prim_eols] or (prim_eof)[#method.prim_eof]
+    ///Matches either (prim_eolss)[#method.prim_eolss] or (prim_eof)[#method.prim_eof]
     pub fn prim_eols_or_eof(mut self: Parser) -> Parser {
         if self.success {
             let display_errors_previous_flag_setting = self.display_errors;
             self.display_errors = false;
-            self = self.combi_first_success_of(&[Parser::prim_eol, Parser::prim_eof].to_vec());
+            self = self.combi_first_success_of(&[Parser::prim_eols, Parser::prim_eof].to_vec());
             if self.success {
                 self.display_errors = display_errors_previous_flag_setting;
                 self
@@ -826,18 +859,63 @@ impl Parser {
 mod tests {
     use super::*;
 
-    #[test]
     //================================================================================
     //Language Aliases Testing
     //================================================================================
-    fn test_lang_prim_next() {
-        let input_str = "123";
-        let language_string = ">";
+    #[test]
+    fn test_lang_prim_eols() {
+        let input_str = "\r\n\r\n\r\n!\n";
+        let language_string = ",@,";
         let result = Parser::new_and_parse_aliases(input_str, language_string);
         assert_eq!(result.input_original, input_str);
-        assert_eq!(result.input_remaining, "23");
+        assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
-        assert_eq!(result.chomp, "1");
+        assert_eq!(result.chomp, "\r\n\r\n\r\n!\n");
+        assert_eq!(result.success, true);
+    }
+    #[test]
+
+    fn test_lang_prim_digit() {
+        let input_str = "0123456789";
+        let language_string = "##########";
+        let result = Parser::new_and_parse_aliases(input_str, language_string);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "0123456789");
+        assert_eq!(result.success, true);
+    }
+    #[test]
+    fn test_lang_prim_char() {
+        let input_str = "+%!";
+        let language_string = "@@@";
+        let result = Parser::new_and_parse_aliases(input_str, language_string);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "+%!");
+        assert_eq!(result.success, true);
+    }
+    #[test]
+    fn test_lang_prim_quote() {
+        let input_str = "\"\"\"";
+        let language_string = "\"\"\"";
+        let result = Parser::new_and_parse_aliases(input_str, language_string);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "");
+        assert_eq!(result.success, true);
+    }
+    #[test]
+    fn test_lang_prim_next() {
+        let input_str = "123";
+        let language_string = ">>>";
+        let result = Parser::new_and_parse_aliases(input_str, language_string);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "123");
         assert_eq!(result.success, true);
     }
 
@@ -1520,11 +1598,11 @@ mod tests {
     }
 
     #[test]
-    fn test_prim_eol() {
+    fn test_prim_eols() {
         //not an eol
         let mut parser = Parser::new("1");
         parser.display_errors = false;
-        let result = parser.clone().prim_eol();
+        let result = parser.clone().prim_eols();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "1");
         assert_eq!(result.output.len(), 0);
@@ -1534,7 +1612,7 @@ mod tests {
         //single eol1
         let mut parser = Parser::new("\n");
         parser.display_errors = false;
-        let result = parser.clone().prim_eol();
+        let result = parser.clone().prim_eols();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
@@ -1544,7 +1622,7 @@ mod tests {
         //single eol2
         let mut parser = Parser::new("\r\n");
         parser.display_errors = false;
-        let result = parser.clone().prim_eol();
+        let result = parser.clone().prim_eols();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
@@ -1554,7 +1632,7 @@ mod tests {
         //multiple eol1
         let mut parser = Parser::new("\n\n\n\n");
         parser.display_errors = false;
-        let result = parser.clone().prim_eol();
+        let result = parser.clone().prim_eols();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
@@ -1564,7 +1642,7 @@ mod tests {
         //multiple eol2
         let mut parser = Parser::new("\r\n\r\n\r\n\r\n");
         parser.display_errors = false;
-        let result = parser.clone().prim_eol();
+        let result = parser.clone().prim_eols();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
