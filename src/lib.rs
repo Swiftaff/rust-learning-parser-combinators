@@ -1,5 +1,8 @@
 use colored::*;
+//extern crate derive_more;
+//use derive_more::{Add, Display, From, Into};
 use std::cmp::PartialEq;
+use std::fmt;
 use unicode_segmentation::UnicodeSegmentation;
 
 ///This is a toy parser/compiler loosely taking inspiration from [Elm Parser](https://package.elm-lang.org/packages/elm/parser/latest/Parser) with the following methods so far...
@@ -63,7 +66,7 @@ pub struct Parser {
     input_original: String,
     input_remaining: String,
     output: Vec<ParserElement>,
-    output_aliases: Vec<ParserFunctionType>,
+    output_aliases: Vec<(ParserFunctionType, Option<String>)>,
     chomp: String,
     chomping: bool,
     success: bool,
@@ -109,24 +112,24 @@ pub enum ParserElementType {
     Str,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ParserFunctionType {
-    TakesParser(ParserFunction, ParserFunctionParam::None), //e.g. primitive except prim_word, element, function
-    TakesParserWord(ParserFunctionString, ParserFunctionParam::Astring), //e.g. prim_word
-    TakesParserFn(ParserFunction, ParserFunctionParam::Aparser), //e.g. simple combinator
-    TakesParserVecFn(
-        ParserFunction,
-        ParserFunctionParam::Avec(<Vec<ParserFunction>>),
-    ), //e.g. combi_until_first_do_second
-                                                            //TakesParserBVecFn(ParserFunction, Vec<ParserFunction>), //e.g. combi_until_first_do_second
+    TakesParser(ParserFunction), //e.g. primitive except prim_word, element, function
+    TakesParserWord(ParserFunctionString), //e.g. prim_word
+                                 //TakesParserFn(ParserFunction, ParserFunctionParam::Aparser), //e.g. simple combinator
+                                 //TakesParserVecFn(
+                                 //    ParserFunction,
+                                 //    ParserFunctionParam::Avec(<Vec<ParserFunction>>),
+                                 //), //e.g. combi_until_first_do_second
+                                 //TakesParserBVecFn(ParserFunction, Vec<ParserFunction>), //e.g. combi_until_first_do_second
 }
 
-pub enum ParserFunctionParam {
-    None,
-    Astring(String),
-    Aparser(ParserFunction),
-    Avec(Vec<ParserFunction>),
-}
+//pub enum ParserFunctionParam {
+//    None,
+//    Astring(String),
+//    Aparser(ParserFunction),
+//    Avec(Vec<ParserFunction>),
+//}
 
 pub type ParserFunction = fn(Parser) -> Parser;
 pub type ParserFunctionString = fn(Parser, &str) -> Parser;
@@ -134,10 +137,8 @@ pub type ParserFunctionString = fn(Parser, &str) -> Parser;
 impl fmt::Debug for ParserFunctionType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            ParserFunctionType::TakesParser(p) => write!(f, "TakesParser"),
-            ParserFunctionType::TakesParserWord(p, s) => write!(f, "TakesParserWord"),
-            ParserFunctionType::TakesParserFn(p, fun) => write!(f, "TakesParserFn"),
-            ParserFunctionType::TakesParserVecFn(p, v) => write!(f, "TakesParserVecFn"),
+            ParserFunctionType::TakesParser(_) => write!(f, "TakesParser"),
+            ParserFunctionType::TakesParserWord(_) => write!(f, "TakesParserWord"),
         }
     }
 }
@@ -152,7 +153,7 @@ impl Parser {
             chomp: "".to_string(),
             chomping: true,
             output: Vec::<ParserElement>::new(),
-            output_aliases: Vec::<ParserFunctionType>::new(),
+            output_aliases: Vec::<(ParserFunctionType, Option<String>)>::new(),
             success: true,
             display_errors: true,
         }
@@ -208,7 +209,7 @@ impl Parser {
             chomp: "".to_string(),
             chomping: true,
             output: Vec::<ParserElement>::new(),
-            output_aliases: Vec::<ParserFunctionType>::new(),
+            output_aliases: Vec::<(ParserFunctionType, Option<String>)>::new(),
             success: true,
             display_errors: true,
         };
@@ -236,11 +237,19 @@ impl Parser {
 
         //second, parse the input_string using those instructions
         let mut parser: Parser = Parser::new(input_string);
-        for f in parser_lang.output_aliases {
+        for (f, param_option) in parser_lang.output_aliases {
             match f {
-                ParserFunctionType::TakesParser(fun, _) => {
+                ParserFunctionType::TakesParser(fun) => {
                     parser = fun(parser);
                 }
+                ParserFunctionType::TakesParserWord(fun) => match param_option {
+                    Some(param) => {
+                        parser = fun(parser, param.as_str());
+                    }
+                    _ => {
+                        return parser;
+                    }
+                },
                 _ => {
                     return parser;
                 }
@@ -308,7 +317,7 @@ impl Parser {
         if self.success {
             self = self.prim_word(word);
             if self.success {
-                self.output_aliases.push(parser_function);
+                self.output_aliases.push((parser_function, None));
                 self
             } else {
                 self.display_error(error_text);
@@ -324,7 +333,7 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ">",
-            ParserFunctionType::TakesParser(Parser::prim_next, ParserFunctionParam::None),
+            ParserFunctionType::TakesParser(Parser::prim_next),
             "lang_prim_next",
         )
     }
@@ -333,7 +342,7 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             "\"",
-            ParserFunctionType::TakesParser(Parser::prim_quote, ParserFunctionParam::None),
+            ParserFunctionType::TakesParser(Parser::prim_quote),
             "lang_prim_quote",
         )
     }
@@ -342,7 +351,7 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             "@",
-            ParserFunctionType::TakesParser(Parser::prim_char, ParserFunctionParam::None),
+            ParserFunctionType::TakesParser(Parser::prim_char),
             "lang_prim_char",
         )
     }
@@ -351,7 +360,7 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             "#",
-            ParserFunctionType::TakesParser(Parser::prim_digit, ParserFunctionParam::None),
+            ParserFunctionType::TakesParser(Parser::prim_digit),
             "lang_prim_digit",
         )
     }
@@ -360,7 +369,7 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ",",
-            ParserFunctionType::TakesParser(Parser::prim_eols, ParserFunctionParam::None),
+            ParserFunctionType::TakesParser(Parser::prim_eols),
             "lang_prim_eols",
         )
     }
@@ -369,7 +378,7 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ".",
-            ParserFunctionType::TakesParser(Parser::prim_eof, ParserFunctionParam::None),
+            ParserFunctionType::TakesParser(Parser::prim_eof),
             "lang_prim_eof",
         )
     }
@@ -378,7 +387,7 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ";",
-            ParserFunctionType::TakesParser(Parser::prim_eols_or_eof, ParserFunctionParam::None),
+            ParserFunctionType::TakesParser(Parser::prim_eols_or_eof),
             "lang_prim_eols_or_eof",
         )
     }
@@ -392,11 +401,10 @@ impl Parser {
             );
             self.display_errors = display_errors_previous_flag_setting;
             if self.success {
-                self.output_aliases
-                    .push(ParserFunctionType::TakesParserWord(
-                        Parser::prim_word,
-                        ParserFunctionParam::Astring(self.clone().chomp),
-                    ));
+                self.output_aliases.push((
+                    ParserFunctionType::TakesParserWord(Parser::prim_word),
+                    Some(self.clone().chomp),
+                ));
                 self = self.chomp_clear();
                 self
             } else {
@@ -981,8 +989,8 @@ mod tests {
         let mut result = Parser::new_and_parse_aliases(input_str, language_string);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "");
-        assert_eq!(result.output.len(), 1);
-        assert_eq!(result.output[0].string, Some("test"));
+        assert_eq!(result.output.len(), 0);
+        assert_eq!(result.chomp, "test");
         assert_eq!(result.success, true);
     }
 
