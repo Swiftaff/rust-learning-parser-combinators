@@ -66,7 +66,7 @@ pub struct Parser {
     input_original: String,
     input_remaining: String,
     output: Vec<ParserElement>,
-    output_aliases: Vec<(ParserFunctionType, Option<String>)>,
+    output_aliases: Vec<(ParserFunctionType, ParserFunctionParam)>,
     chomp: String,
     chomping: bool,
     success: bool,
@@ -116,29 +116,41 @@ pub enum ParserElementType {
 pub enum ParserFunctionType {
     TakesParser(ParserFunction), //e.g. primitive except prim_word, element, function
     TakesParserWord(ParserFunctionString), //e.g. prim_word
-                                 //TakesParserFn(ParserFunction, ParserFunctionParam::Aparser), //e.g. simple combinator
-                                 //TakesParserVecFn(
-                                 //    ParserFunction,
-                                 //    ParserFunctionParam::Avec(<Vec<ParserFunction>>),
-                                 //), //e.g. combi_until_first_do_second
-                                 //TakesParserBVecFn(ParserFunction, Vec<ParserFunction>), //e.g. combi_until_first_do_second
+    TakesParserFn(ParserFunctionParserFunction), //e.g. simple combinator like combi_parser_one_or_more
+                                                 //TakesParserVecFn(ParserFunction, ParserFunctionParam::Avec(<Vec<ParserFunction>>)), //e.g. combi_until_first_do_second
+                                                 //TakesParserBVecFn(ParserFunction, Vec<ParserFunction>), //e.g. combi_until_first_do_second
 }
 
-//pub enum ParserFunctionParam {
-//    None,
-//    Astring(String),
-//    Aparser(ParserFunction),
-//    Avec(Vec<ParserFunction>),
-//}
+///None, String, Parser, VecParser
+#[derive(Clone)]
+pub enum ParserFunctionParam {
+    None,
+    String(String),
+    ParserFn(ParserFunction),
+    VecParserFn(Vec<ParserFunction>),
+}
 
 pub type ParserFunction = fn(Parser) -> Parser;
 pub type ParserFunctionString = fn(Parser, &str) -> Parser;
+pub type ParserFunctionParserFunction = fn(Parser, ParserFunction) -> Parser;
 
 impl fmt::Debug for ParserFunctionType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             ParserFunctionType::TakesParser(_) => write!(f, "TakesParser"),
             ParserFunctionType::TakesParserWord(_) => write!(f, "TakesParserWord"),
+            ParserFunctionType::TakesParserFn(_) => write!(f, "TakesParserFn"),
+        }
+    }
+}
+
+impl fmt::Debug for ParserFunctionParam {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ParserFunctionParam::None => write!(f, "None"),
+            ParserFunctionParam::String(_) => write!(f, "String"),
+            ParserFunctionParam::ParserFn(_) => write!(f, "ParserFn"),
+            ParserFunctionParam::VecParserFn(_) => write!(f, "VecParserFn"),
         }
     }
 }
@@ -153,7 +165,7 @@ impl Parser {
             chomp: "".to_string(),
             chomping: true,
             output: Vec::<ParserElement>::new(),
-            output_aliases: Vec::<(ParserFunctionType, Option<String>)>::new(),
+            output_aliases: Vec::<(ParserFunctionType, ParserFunctionParam)>::new(),
             success: true,
             display_errors: true,
         }
@@ -209,7 +221,7 @@ impl Parser {
             chomp: "".to_string(),
             chomping: true,
             output: Vec::<ParserElement>::new(),
-            output_aliases: Vec::<(ParserFunctionType, Option<String>)>::new(),
+            output_aliases: Vec::<(ParserFunctionType, ParserFunctionParam)>::new(),
             success: true,
             display_errors: true,
         };
@@ -220,19 +232,7 @@ impl Parser {
         //first, parse the parser_lang_string to get the series of your parser instructions
         let mut parser_lang: Parser = Parser::new(parser_lang_string);
         while parser_lang.success && parser_lang.input_remaining.len() > 0 {
-            parser_lang = parser_lang.combi_first_success_of(
-                &[
-                    Parser::lang_prim_word,
-                    Parser::lang_prim_eols_or_eof,
-                    Parser::lang_prim_eof,
-                    Parser::lang_prim_eols,
-                    Parser::lang_prim_quote,
-                    Parser::lang_prim_digit,
-                    Parser::lang_prim_char,
-                    Parser::lang_prim_next,
-                ]
-                .to_vec(),
-            );
+            parser_lang = parser_lang.lang_one_of_all_lang_parsers();
         }
 
         //second, parse the input_string using those instructions
@@ -243,8 +243,8 @@ impl Parser {
                     parser = fun(parser);
                 }
                 ParserFunctionType::TakesParserWord(fun) => match param_option {
-                    Some(param) => {
-                        parser = fun(parser, param.as_str());
+                    ParserFunctionParam::String(string) => {
+                        parser = fun(parser, string.as_str());
                     }
                     _ => {
                         return parser;
@@ -303,21 +303,55 @@ impl Parser {
         }
         found
     }
+
+    pub fn get_parser_function_by_name(name: String) -> ParserFunction {
+        match name.as_str() {
+            ">" => Parser::lang_prim_next,
+            "\"" => Parser::lang_prim_quote,
+            //TODO handle prim_word
+            "@" => Parser::lang_prim_char,
+            "#" => Parser::lang_prim_digit,
+            "," => Parser::lang_prim_eols,
+            "." => Parser::lang_prim_eof,
+            ";" => Parser::lang_prim_eols_or_eof,
+            //TODO handle combinators
+            //TODO handle elements
+            _ => Parser::lang_prim_eof,
+        }
+    }
 }
 
 /// ## Language Aliases
 ///Functions to help decode a string of aliases of the parser functions of this module
 impl Parser {
+    pub fn lang_one_of_all_lang_parsers(self: Parser) -> Parser {
+        self.combi_first_success_of(
+            &[
+                Parser::lang_prim_word,
+                Parser::lang_prim_eols_or_eof,
+                Parser::lang_prim_eof,
+                Parser::lang_prim_eols,
+                Parser::lang_prim_quote,
+                Parser::lang_prim_digit,
+                Parser::lang_prim_char,
+                Parser::lang_prim_next,
+            ]
+            .to_vec(),
+        )
+    }
+
     pub fn lang_factory_takes_parser(
         mut self: Parser,
         word: &str,
         parser_function: ParserFunctionType,
+        parser_parameter: ParserFunctionParam,
         error_text: &str,
     ) -> Parser {
         if self.success {
             self = self.prim_word(word);
             if self.success {
-                self.output_aliases.push((parser_function, None));
+                self.output_aliases
+                    .push((parser_function, parser_parameter));
                 self
             } else {
                 self.display_error(error_text);
@@ -329,11 +363,13 @@ impl Parser {
     }
 
     //Primitives
+
     pub fn lang_prim_next(self: Parser) -> Parser {
         Parser::lang_factory_takes_parser(
             self,
             ">",
             ParserFunctionType::TakesParser(Parser::prim_next),
+            ParserFunctionParam::None,
             "lang_prim_next",
         )
     }
@@ -343,6 +379,7 @@ impl Parser {
             self,
             "\"",
             ParserFunctionType::TakesParser(Parser::prim_quote),
+            ParserFunctionParam::None,
             "lang_prim_quote",
         )
     }
@@ -352,6 +389,7 @@ impl Parser {
             self,
             "@",
             ParserFunctionType::TakesParser(Parser::prim_char),
+            ParserFunctionParam::None,
             "lang_prim_char",
         )
     }
@@ -361,6 +399,7 @@ impl Parser {
             self,
             "#",
             ParserFunctionType::TakesParser(Parser::prim_digit),
+            ParserFunctionParam::None,
             "lang_prim_digit",
         )
     }
@@ -370,6 +409,7 @@ impl Parser {
             self,
             ",",
             ParserFunctionType::TakesParser(Parser::prim_eols),
+            ParserFunctionParam::None,
             "lang_prim_eols",
         )
     }
@@ -379,6 +419,7 @@ impl Parser {
             self,
             ".",
             ParserFunctionType::TakesParser(Parser::prim_eof),
+            ParserFunctionParam::None,
             "lang_prim_eof",
         )
     }
@@ -388,6 +429,7 @@ impl Parser {
             self,
             ";",
             ParserFunctionType::TakesParser(Parser::prim_eols_or_eof),
+            ParserFunctionParam::None,
             "lang_prim_eols_or_eof",
         )
     }
@@ -403,7 +445,7 @@ impl Parser {
             if self.success {
                 self.output_aliases.push((
                     ParserFunctionType::TakesParserWord(Parser::prim_word),
-                    Some(self.clone().chomp),
+                    ParserFunctionParam::String(self.clone().chomp),
                 ));
                 self = self.chomp_clear();
                 self
@@ -418,9 +460,32 @@ impl Parser {
 
     //Combinators
 
-    //pub fn lang_combi_one_or_more(self: Parser) -> Parser {
-    //    Parser::lang_factory_takes_parser(self, ";", ParserFunctionType::TakesParserVecFn(Parser::combi_one_or_more_of),"lang_combi_one_or_more")
-    //}
+    pub fn lang_combi_one_or_more(mut self: Parser) -> Parser {
+        if self.success {
+            let display_errors_previous_flag_setting = self.display_errors;
+            self.display_errors = false;
+            self = self
+                .prim_word("1+")
+                .combi_zero_or_more_of(Parser::prim_space)
+                .combi_until_first_do_second([Parser::prim_space, Parser::prim_next].to_vec());
+            self.display_errors = display_errors_previous_flag_setting;
+            if self.success {
+                self.output_aliases.push((
+                    ParserFunctionType::TakesParserFn(Parser::combi_one_or_more_of),
+                    ParserFunctionParam::ParserFn(Parser::get_parser_function_by_name(
+                        self.clone().chomp,
+                    )),
+                ));
+                self = self.chomp_clear();
+                self
+            } else {
+                self.display_error("lang_combi_one_or_more");
+                self
+            }
+        } else {
+            self
+        }
+    }
 }
 
 /// ## Parser primitives
@@ -453,6 +518,14 @@ impl Parser {
         } else {
             self
         }
+    }
+
+    pub fn prim_space(mut self: Parser) -> Parser {
+        let chomping_previous_flag_setting = self.chomping;
+        self.chomping = false;
+        self = self.prim_word(" ");
+        self.chomping = chomping_previous_flag_setting;
+        self
     }
 
     pub fn prim_quote(mut self: Parser) -> Parser {
@@ -979,6 +1052,13 @@ impl Parser {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_get_parser_function_by_name() {
+        assert_eq!(
+            Parser::get_parser_function_by_name(">".to_string()) == Parser::lang_prim_next,
+            true
+        );
+    }
     //================================================================================
     //Language Aliases Testing
     //================================================================================
