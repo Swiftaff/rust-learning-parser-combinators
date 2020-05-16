@@ -94,6 +94,13 @@ pub struct ParserElement {
     string: Option<String>,
     var_name: Option<String>,
 }
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParserElementType {
+    Int64,
+    Float64,
+    Var,
+    Str,
+}
 
 impl ParserElement {
     pub fn new() -> ParserElement {
@@ -107,12 +114,28 @@ impl ParserElement {
     }
 }
 
+//TODO tryout this simpler parser element
+#[derive(Debug, Clone)]
+pub struct ParserEl {
+    el_type: Option<ParserElementType>,
+    value: Option<ParserElValue>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum ParserElementType {
-    Int64,
-    Float64,
-    Var,
-    Str,
+pub enum ParserElValue {
+    I64(i64),
+    F64(f64),
+    Str(String),
+    Var(String),
+}
+
+impl ParserEl {
+    pub fn new() -> ParserEl {
+        ParserEl {
+            el_type: None,
+            value: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1227,7 +1250,7 @@ mod tests {
         assert_eq!(result.output.len(), 1);
         assert_eq!(result.output[0].el_type, Some(ParserElementType::Str));
         assert_eq!(result.output[0].string, Some("1234".to_string()));
-        //println!("{:?}",);
+        println!("{:?}", result.output_arena);
         assert_eq!(result.output_arena.count(), 2);
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
