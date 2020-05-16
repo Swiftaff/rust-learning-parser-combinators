@@ -342,6 +342,47 @@ impl Parser {
             _ => Parser::lang_prim_eof,
         }
     }
+
+    pub fn append_element(mut self: Parser, el: ParserElement) -> Parser {
+        let arena = &mut self.output_arena;
+        let new_node = arena.new_node(el);
+        self.output_arena_node_parent_id.append(new_node, arena);
+        self
+    }
+
+    pub fn get_current_parent_element(mut self: Parser) -> Option<ParserElement> {
+        let arena = &mut self.output_arena;
+        let current_parent_node_id = self.output_arena_node_parent_id;
+        let parent_option = arena.get(current_parent_node_id);
+        match parent_option {
+            Some(parent) => Some(parent.get().clone()),
+            _ => None,
+        }
+        //parent_option.get()
+    }
+
+    pub fn get_last_child_element(mut self: Parser) -> Option<ParserElement> {
+        let arena = &mut self.output_arena;
+        let current_parent_node_id = self.output_arena_node_parent_id;
+        let parent_option = arena.get(current_parent_node_id);
+        match parent_option {
+            Some(parent) => {
+                let last_child_id_option = parent.last_child();
+                match last_child_id_option {
+                    Some(last_child_id) => {
+                        let child_option = arena.get(last_child_id);
+                        match child_option {
+                            Some(child) => Some(child.get().clone()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+        //parent_option.get()
+    }
 }
 
 /// ## Language Aliases
@@ -839,12 +880,15 @@ impl Parser {
                 el.el_type = Some(ParserElementType::Str);
                 el.string = Some(val);
 
-                //new indexTree approach
-                let arena = &mut self.output_arena;
-                let new_node = arena.new_node(el.clone());
-                self.output_arena_node_parent_id.append(new_node, arena);
                 //old approach
-                self.output.push(el);
+                //self.output.push(el.clone());
+
+                //new indexTree approach
+                self = self.append_element(el);
+
+                //let arena = &mut self.output_arena;
+                //let new_node = arena.new_node(el.clone());
+                //self.output_arena_node_parent_id.append(new_node, arena);
 
                 self = self.chomp_clear();
                 self
@@ -1247,11 +1291,15 @@ mod tests {
         let result = Parser::new_and_parse(input_str, Parser::el_str);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "");
-        assert_eq!(result.output.len(), 1);
-        assert_eq!(result.output[0].el_type, Some(ParserElementType::Str));
-        assert_eq!(result.output[0].string, Some("1234".to_string()));
-        println!("{:?}", result.output_arena);
         assert_eq!(result.output_arena.count(), 2);
+        let el_option = result.clone().get_last_child_element();
+        match el_option {
+            Some(el) => {
+                assert_eq!(el.el_type, Some(ParserElementType::Str));
+                assert_eq!(el.string, Some("1234".to_string()));
+            }
+            _ => assert!(true, false),
+        }
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
     }
