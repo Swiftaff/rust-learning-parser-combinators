@@ -1,6 +1,7 @@
 use colored::*;
 //extern crate derive_more;
 //use derive_more::{Add, Display, From, Into};
+use indextree::Arena;
 use std::cmp::PartialEq;
 use std::fmt;
 use unicode_segmentation::UnicodeSegmentation;
@@ -67,10 +68,31 @@ pub struct Parser {
     input_remaining: String,
     output: Vec<ParserElement>,
     output_aliases: Vec<(ParserFunctionType, ParserFunctionParam)>,
+    output_nested_elements: Vec<Box<NestedElement>>,
+    output_nested_element_ref: Box<NestedElement>,
     chomp: String,
     chomping: bool,
     success: bool,
     display_errors: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct NestedElement {
+    name: String,
+    element: ParserElement,
+    children: Vec<Box<NestedElement>>,
+    parent: Option<Box<NestedElement>>,
+}
+
+impl NestedElement {
+    pub fn new(name: String) -> NestedElement {
+        NestedElement {
+            name,
+            element: ParserElement::new(),
+            children: Vec::<Box<NestedElement>>::new(),
+            parent: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +181,8 @@ impl fmt::Debug for ParserFunctionParam {
 impl Parser {
     ///Initialises a new parser with the string you wish to parse
     pub fn new(input_string: &str) -> Parser {
+        let root_nested_element = Vec::<Box<NestedElement>>::new();
+        root_nested_element.push(Box::new(NestedElement::new("root".to_string())));
         Parser {
             input_original: input_string.to_string(),
             input_remaining: input_string.to_string(),
@@ -166,6 +190,8 @@ impl Parser {
             chomping: true,
             output: Vec::<ParserElement>::new(),
             output_aliases: Vec::<(ParserFunctionType, ParserFunctionParam)>::new(),
+            output_nested_elements: root_nested_element,
+            output_nested_element_ref: root_nested_element[0],
             success: true,
             display_errors: true,
         }
@@ -215,6 +241,8 @@ impl Parser {
     where
         F: Fn(Parser) -> Parser,
     {
+        let root_nested_element = Vec::<Box<NestedElement>>::new();
+        root_nested_element.push(Box::new(NestedElement::new("root".to_string())));
         let new_parser: Parser = Parser {
             input_original: input_string.to_string(),
             input_remaining: input_string.to_string(),
@@ -222,6 +250,8 @@ impl Parser {
             chomping: true,
             output: Vec::<ParserElement>::new(),
             output_aliases: Vec::<(ParserFunctionType, ParserFunctionParam)>::new(),
+            output_nested_elements: root_nested_element,
+            output_nested_element_ref: root_nested_element[0],
             success: true,
             display_errors: true,
         };
@@ -327,6 +357,9 @@ impl Parser {
     pub fn lang_one_of_all_lang_parsers(self: Parser) -> Parser {
         self.combi_first_success_of(
             &[
+                //combinators
+                Parser::lang_combi_one_or_more,
+                //primitives
                 Parser::lang_prim_word,
                 Parser::lang_prim_eols_or_eof,
                 Parser::lang_prim_eof,
@@ -470,6 +503,14 @@ impl Parser {
                 .combi_until_first_do_second([Parser::prim_space, Parser::prim_next].to_vec());
             self.display_errors = display_errors_previous_flag_setting;
             if self.success {
+                //TODO can't just do this because the chomp string, might be another nested combi...
+                //ParserFunctionParam::ParserFn(Parser::get_parser_function_by_name(
+                //    self.clone().chomp,
+                //)),
+
+                //Have to call the parser on that string
+                //But it's getting a bit manual - need to look at a more nested AST approach?
+
                 self.output_aliases.push((
                     ParserFunctionType::TakesParserFn(Parser::combi_one_or_more_of),
                     ParserFunctionParam::ParserFn(Parser::get_parser_function_by_name(
@@ -804,6 +845,11 @@ impl Parser {
                 let val = self.clone().chomp;
                 el.el_type = Some(ParserElementType::Str);
                 el.string = Some(val);
+
+                let parent = self.output_nested_element_ref;
+                let mut new_nested_element = NestedElement::new("string".to_string());
+                new_nested_element.element = el.clone();
+                parent.children.push(Box::new(new_nested_element));
                 self.output.push(el);
                 self = self.chomp_clear();
                 self
@@ -1053,6 +1099,19 @@ mod tests {
     use super::*;
 
     #[test]
+    ///TODO Need a way to test equlity of expected_result
+    fn test_lang_one_of_all_lang_parsers() {
+        let language_string = ">";
+        let expected_result = (
+            ParserFunctionType::TakesParser(Parser::prim_next),
+            ParserFunctionParam::None,
+        );
+        let p = Parser::new(language_string);
+        let result = Parser::lang_one_of_all_lang_parsers(p);
+        assert_eq!(result.input_original, language_string);
+    }
+
+    #[test]
     fn test_get_parser_function_by_name() {
         assert_eq!(
             Parser::get_parser_function_by_name(">".to_string()) == Parser::lang_prim_next,
@@ -1060,13 +1119,29 @@ mod tests {
         );
     }
     //================================================================================
-    //Language Aliases Testing
+    //Start Language Aliases Testing
     //================================================================================
+
+    //lang_combinators
+
+    #[test]
+    fn test_lang_combi_one_or_more() {
+        //only combis of prims so far
+        let input_str = "aaaa";
+        let language_string = "1+a";
+        let result = Parser::new_and_parse_aliases(input_str, language_string);
+        assert_eq!(result.input_original, input_str);
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.output.len(), 0);
+        //assert_eq!(result.chomp, "aaaa");
+        assert_eq!(result.success, true);
+    }
+
     #[test]
     fn test_lang_prim_word() {
-        let mut input_str = "test";
-        let mut language_string = "'test'";
-        let mut result = Parser::new_and_parse_aliases(input_str, language_string);
+        let input_str = "test";
+        let language_string = "'test'";
+        let result = Parser::new_and_parse_aliases(input_str, language_string);
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output.len(), 0);
@@ -1166,6 +1241,9 @@ mod tests {
         assert_eq!(result.chomp, "123");
         assert_eq!(result.success, true);
     }
+    //================================================================================
+    //End Language Aliases Testing
+    //================================================================================
 
     #[test]
     //A string
