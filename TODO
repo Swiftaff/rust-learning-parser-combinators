@@ -1,0 +1,20 @@
+test-Run2:
+  find_element_var:
+    ✔ todo @done(20-05-17 23:46)
+  
+  fn_var_assign:
+    arena_get_nth_last_child_element:
+      ✘ needs to allow for is_removed - or does it? @cancelled(20-05-18 00:35)
+    ✔ simplify creating new el, e.g. = old val + old var name @done(20-05-17 23:46)
+    ✔ how to remove node children in arena @done(20-05-18 00:34)
+
+fix commented out tests related to output switching to output_arena:
+  test_multiple_variable_assign
+  test_variable_sum
+  test_variable_assign
+
+fix broken tests:
+  test_int
+  test_multiple_variable_assign
+  test_variable_assign
+    
