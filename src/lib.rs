@@ -203,9 +203,13 @@ impl Parser {
     }
 
     ///Defines the parser to run, then runs it on the initialised parser from new
+    ///for now it only contains a few things...
+    ///'fn_var_assign' which itself calls sub-parsers like el_int, el_float, fn_var_sum
+    ///'prim_eols' to allow separating the variable assignments
     pub fn parse(mut self: Parser) -> Parser {
         while self.success && self.input_remaining.len() > 0 {
-            self = self.combi_first_success_of(&[Parser::fn_var_assign].to_vec());
+            self =
+                self.combi_first_success_of(&[Parser::fn_var_assign, Parser::prim_eols].to_vec());
         }
         self
     }
@@ -1017,7 +1021,7 @@ impl Parser {
 /// ## Parser Functions
 impl Parser {
     ///equals sign, el_var name, value (test using el_int for now), e.g. "= x 1" (x equals 1)
-    pub fn fn_var_assign(mut self: Parser) -> Parser {
+    pub fn fn_var_assign(self: Parser) -> Parser {
         let mut temp_self = self
             .clone()
             .prim_word("= ")
@@ -1025,7 +1029,7 @@ impl Parser {
             .el_var()
             .combi_first_success_of(
                 &[
-                    //Parser::fn_var_sum,
+                    Parser::fn_var_sum,
                     //el_float first so the number before . is not thought of as an el_int
                     Parser::el_float,
                     Parser::el_int,
@@ -1051,17 +1055,16 @@ impl Parser {
                     temp_self
                 }
                 _ => {
-                    self.display_error("fn_var_assign - no variable or value found to assign");
+                    temp_self.display_error("fn_var_assign - no variable or value found to assign");
                     temp_self
                 }
             }
         } else {
-            self.display_error("fn_var_assign");
+            temp_self.display_error("fn_var_assign");
             temp_self
         }
     }
 
-    /*
     ///plus sign, value, value (both ints or both floats), e.g. "+ 1 2" (1 + 2 = 3) or "+ 1.2 3.4" (1.2 + 3.4 = 4.6)
     pub fn fn_var_sum(mut self: Parser) -> Parser {
         let mut original_self = self.clone();
@@ -1103,52 +1106,80 @@ impl Parser {
         }
 
         let mut el = ParserElement::new();
-        let variable1_el = self.output[self.output.len() - 2].clone();
-        let variable2_el = self.output[self.output.len() - 1].clone();
-        //check both values have the same element type
-        match (variable1_el.el_type, variable2_el.el_type) {
-            (Some(el1_type), Some(el2_type)) => {
-                if el1_type == el2_type {
-                    match el1_type {
-                        //if it's an el_int set the int64 of the new element to the sum of the 2 ints
-                        ParserElementType::Int64 => {
-                            match (variable1_el.int64, variable2_el.int64) {
-                                (Some(val1), Some(val2)) => {
-                                    el.int64 = Some(val1 + val2);
+        //check both values exist
+        let variable2_el_option = self.clone().arena_get_nth_last_child_element(0);
+        let variable1_el_option = self.clone().arena_get_nth_last_child_element(1);
+        match (variable1_el_option, variable2_el_option) {
+            (Some(variable1_el), Some(variable2_el)) => {
+                //check both values have the same element type
+                match (variable1_el.el_type, variable2_el.el_type) {
+                    (Some(el1_type), Some(el2_type)) => {
+                        if el1_type == el2_type {
+                            match el1_type {
+                                //if it's an el_int set the int64 of the first element to be the sum of the 2 ints
+                                //(because we will remove the second element)
+                                ParserElementType::Int64 => {
+                                    match (variable1_el.int64, variable2_el.int64) {
+                                        (Some(val1), Some(val2)) => {
+                                            el.el_type = Some(ParserElementType::Int64);
+                                            el.int64 = Some(val1 + val2);
+                                        }
+                                        (_, _) => {
+                                            original_self.success = false;
+                                            original_self //original_self
+                                                .display_error("fn_var_sum - can't find two Int64 values");
+                                            return original_self;
+                                        }
+                                    }
                                 }
-                                (_, _) => (),
-                            }
-                        }
-                        ParserElementType::Str => {
-                            match (variable1_el.string, variable2_el.string) {
-                                (Some(_), Some(_)) => {
-                                    self.success = false;
-                                    original_self.display_error("fn_var_sum - can't sum strings");
-                                    return self;
+
+                                //can't sum strings
+                                ParserElementType::Str => {
+                                    original_self.success = false;
+                                    original_self //original_self
+                                        .display_error("fn_var_sum - can't sum strings");
+                                    return original_self;
                                 }
-                                (_, _) => (),
+
+                                //if it's an el_float set the Float64 of the first element to be the sum of the 2 floats
+                                //(because we will remove the second element)
+                                _ => {
+                                    match (variable1_el.float64, variable2_el.float64) {
+                                        (Some(val1), Some(val2)) => {
+                                            el.el_type = Some(ParserElementType::Float64);
+                                            el.float64 = Some(val1 + val2);
+                                        }
+                                        (_, _) => {
+                                            original_self.success = false;
+                                            original_self //original_self
+                                                .display_error("fn_var_sum - can't find two Float64 values");
+                                            return original_self;
+                                        }
+                                    }
+                                }
                             }
+
+                            //remove the last 2 value elements
+                            self = self.arena_remove_nth_last_child_element(0);
+                            self = self.arena_remove_nth_last_child_element(0);
+                            //add combined (sum) element back into arena
+                            self = self.arena_append_element(el);
+                            self = self.chomp_clear();
+                            self
+                        } else {
+                            self
                         }
-                        _ => match (variable1_el.float64, variable2_el.float64) {
-                            (Some(val1), Some(val2)) => {
-                                el.float64 = Some(val1 + val2);
-                            }
-                            (_, _) => (),
-                        },
                     }
-                    el.el_type = Some(el1_type);
-                    self.output.remove(self.output.len() - 1);
-                    self.output.remove(self.output.len() - 1);
-                    self.output.push(el);
-                    self = self.chomp_clear();
-                    self
-                } else {
-                    self
+                    (_, _) => self,
                 }
             }
-            (_, _) => self,
+            _ => {
+                original_self.display_error("fn_var_sum - can't find either or both values");
+                original_self.success = false;
+                original_self
+            }
         }
-    }*/
+    }
 }
 
 #[cfg(test)]
@@ -1395,7 +1426,7 @@ mod tests {
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
     }
-    /*
+
     #[test]
     fn test_variable_sum() {
         //not a valid el_var sum
@@ -1430,6 +1461,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
+        let el_option = result.clone().arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1446,6 +1478,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
+        let el_option = result.clone().arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1462,6 +1495,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
+        let el_option = result.clone().arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1478,6 +1512,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
+        let el_option = result.clone().arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1494,6 +1529,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
+        let el_option = result.clone().arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1510,6 +1546,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
+        let el_option = result.clone().arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1519,16 +1556,17 @@ mod tests {
         }
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
-    }*/
+    }
     #[test]
     fn test_multiple_variable_assign() {
-        let mut parser = Parser::new("= x + 1 2\r\n= y + 3 4\r\n= z + 5.0 6.0");
-        parser.display_errors = false;
-        let result = parser.clone().parse();
-        assert_eq!(result.input_original, parser.input_original);
+        let input_string = "= x + 1 2\r\n= y + 3 4\r\n= z + 5.0 6.0";
+        let mut parser = Parser::new(input_string);
+        //parser.display_errors = false;
+        let result = parser.parse();
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
 
-        let el_option = result.clone().arena_get_last_child_element();
+        let mut el_option = result.clone().arena_get_nth_last_child_element(2);
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1537,18 +1575,26 @@ mod tests {
             }
             _ => assert!(true, false),
         }
-        /*
-        assert_eq!(result.output.len(), 3);
-        assert_eq!(result.output[0].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[0].var_name, Some("x".to_string()));
-        assert_eq!(result.output[0].int64, Some(3));
-        assert_eq!(result.output[1].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[1].var_name, Some("y".to_string()));
-        assert_eq!(result.output[1].int64, Some(7));
-        assert_eq!(result.output[2].el_type, Some(ParserElementType::Var));
-        assert_eq!(result.output[2].var_name, Some("z".to_string()));
-        assert_eq!(result.output[2].float64, Some(11.0));
-        */
+
+        el_option = result.clone().arena_get_nth_last_child_element(1);
+        match el_option {
+            Some(el) => {
+                assert_eq!(el.el_type, Some(ParserElementType::Var));
+                assert_eq!(el.var_name, Some("y".to_string()));
+                assert_eq!(el.int64, Some(7));
+            }
+            _ => assert!(true, false),
+        }
+
+        el_option = result.clone().arena_get_nth_last_child_element(0);
+        match el_option {
+            Some(el) => {
+                assert_eq!(el.el_type, Some(ParserElementType::Var));
+                assert_eq!(el.var_name, Some("z".to_string()));
+                assert_eq!(el.float64, Some(11.0));
+            }
+            _ => assert!(true, false),
+        }
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
 
@@ -1573,20 +1619,18 @@ mod tests {
     #[test]
     fn test_variable_assign() {
         //not a el_var assignment
-        /*let mut parser = Parser::new(" = x 1");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        let mut input_string = " = x 1";
+        let mut result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, " = x 1");
         assert_eq!(result.chomp, "");
-        assert_eq!(result.success, false);*/
+        assert_eq!(result.success, false);
 
         //"= x (+ 1 (+ 2 (+ 3 4)))", i.e. x = 1 + (2 + (3 + 4))
         //as below with brackets notation
-        let mut parser = Parser::new("= x (+ 1 (+ 2 (+ 3 4)))");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x (+ 1 (+ 2 (+ 3 4)))";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1599,13 +1643,12 @@ mod tests {
         }
         assert_eq!(result.chomp, "");
         assert_eq!(result.success, true);
-        /*
+
         //"= x + 1 + 2 + 3 4", i.e. x = 1 + (2 + (3 + 4))
         //short name el_var assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints
-        parser = Parser::new("= x + 1 + 2 + 3 4");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x + 1 + 2 + 3 4";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1621,10 +1664,9 @@ mod tests {
 
         //"= x + + 1 2 + 3 4", i.e. x = (1 + 2) + (3 + 4))
         //short name el_var assignment to sum of 2 short ints, where the second is 2 nested sums of 2 short ints, different format
-        parser = Parser::new("= x + + 1 2 + 3 4");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x + + 1 2 + 3 4";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1640,10 +1682,9 @@ mod tests {
 
         //"= x + 1 + 2 3", i.e. x = 1 + (2 + 3)
         //short name el_var assignment to sum of 2 short ints, where the second is a sum of 2 short ints
-        parser = Parser::new("= x + 1 + 2 3");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x + 1 + 2 3";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1658,10 +1699,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         //short name el_var assignment to sum of 2 short ints
-        parser = Parser::new("= x + 1 2");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x + 1 2";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1676,10 +1716,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         //short name el_var assignment to sum of 2 long floats
-        parser = Parser::new("= x + 11111.11111 22222.22222");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x + 11111.11111 22222.22222";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1694,10 +1733,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         //short name el_var assignment to short el_int
-        parser = Parser::new("= x 1");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x 1";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1712,10 +1750,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         //short name el_var assignment to short el_int with newlines
-        parser = Parser::new("= x 1\r\n\r\n\r\n");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x 1\r\n\r\n\r\n";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1730,10 +1767,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         //long name el_var with grapheme assignment to long negative el_int
-        parser = Parser::new("= éxample_long_variable_name -123456");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= éxample_long_variable_name -123456";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1748,10 +1784,9 @@ mod tests {
         assert_eq!(result.success, true);
 
         //short name el_var assignment to short el_float
-        parser = Parser::new("= x 1.2");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x 1.2";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
@@ -1766,22 +1801,21 @@ mod tests {
         assert_eq!(result.success, true);
 
         //short name el_var assignment to long negative el_float
-        parser = Parser::new("= x 1.2");
-        parser.display_errors = false;
-        let result = parser.clone().fn_var_assign();
-        assert_eq!(result.input_original, parser.input_original);
+        input_string = "= x -11111.22222";
+        result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
+        assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
         let el_option = result.clone().arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
                 assert_eq!(el.var_name, Some("x".to_string()));
-                assert_eq!(el.float64, Some(1.2));
+                assert_eq!(el.float64, Some(-11111.22222));
             }
             _ => assert!(true, false),
         }
         assert_eq!(result.chomp, "");
-        assert_eq!(result.success, true);*/
+        assert_eq!(result.success, true);
     }
 
     #[test]
@@ -1947,7 +1981,7 @@ mod tests {
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
-                assert_eq!(el.int64, Some(123456));
+                assert_eq!(el.int64, Some(-123456));
             }
             _ => assert!(true, false),
         }

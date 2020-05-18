@@ -9,12 +9,37 @@ test-Run2:
     ✔ how to remove node children in arena @done(20-05-18 00:34)
 
 fix commented out tests related to output switching to output_arena:
-  test_multiple_variable_assign
-  test_variable_sum
-  test_variable_assign
+  ✔ test_multiple_variable_assign @done(20-05-18 23:26)
+  test_variable_sum:
+     ✔ fn_var_sum @done(20-05-18 22:31)
+  ✔ test_variable_assign @done(20-05-18 23:26)
 
 fix broken tests:
-  test_int
-  test_multiple_variable_assign
-  test_variable_assign
-    
+  ✔ test_int @done(20-05-18 08:23)
+
+get all test_lang...'s working:
+  primitives:
+    ✔ test_lang_prim_next @done(20-05-18 23:35)
+    ✔ test_lang_prim_quote @done(20-05-18 23:35)
+    ✔ test_lang_prim_word @done(20-05-18 23:35)
+    ✔ test_lang_prim_char @done(20-05-18 23:35)
+    ✔ test_lang_prim_digit @done(20-05-18 23:35)
+    ✔ test_lang_prim_eols @done(20-05-18 23:35)
+    ✔ test_lang_prim_eof @done(20-05-18 23:35)
+    ✔ test_lang_prim_eols_or_eof @done(20-05-18 23:35)
+  combinators:
+    test_lang_combi_one_or_more:
+      ☐ uncomment, get working
+      ☐ replace output_aliases with arena-based approach?
+    ☐ test_combi_zero_or_more_of
+    ☐ test_combi_until_first_do_second
+    ☐ test_combi_optional
+    ☐ test_combi_first_success_of
+
+  elements:
+    ☐ test_el_str
+    ☐ test_el_int
+    ☐ test_el_float
+    ☐ test_el_var
+
+     
