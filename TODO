@@ -19,18 +19,27 @@ fix broken tests:
 
 get all test_lang...'s working:
   primitives:
-    ✔ test_lang_prim_next @done(20-05-18 23:35)
-    ✔ test_lang_prim_quote @done(20-05-18 23:35)
-    ✔ test_lang_prim_word @done(20-05-18 23:35)
-    ✔ test_lang_prim_char @done(20-05-18 23:35)
-    ✔ test_lang_prim_digit @done(20-05-18 23:35)
-    ✔ test_lang_prim_eols @done(20-05-18 23:35)
-    ✔ test_lang_prim_eof @done(20-05-18 23:35)
-    ✔ test_lang_prim_eols_or_eof @done(20-05-18 23:35)
+    ✔ test_lang_prim_next @done(20-05-19 23:52)
+      ✔ lang_prim_next @done(20-05-19 23:49)
+        ✔ lang_factory_takes_parser @done(20-05-19 23:49)
+          ✔ arena_append_element etc - renamed to output_arena... @done(20-05-19 22:10)
+          ✔ create ParserFunctionTypeAndParam @done(20-05-19 22:20)
+    ☐ as needed - duplicate output_arena_append_element etc for language_arena...
+    ✔ test_lang_prim_quote @done(20-05-19 23:49)
+    ✔ test_lang_prim_word @done(20-05-19 23:51)
+    ✔ test_lang_prim_char @done(20-05-19 23:49)
+    ✔ test_lang_prim_digit @done(20-05-19 23:49)
+    ✔ test_lang_prim_eols @done(20-05-19 23:49)
+    ✔ test_lang_prim_eof @done(20-05-19 23:49)
+    ✔ test_lang_prim_eols_or_eof @done(20-05-19 23:49)
   combinators:
     test_lang_combi_one_or_more:
       ☐ uncomment, get working
       ☐ replace output_aliases with arena-based approach?
+        ☐ fix all existing lang parsers
+          ☐ new_and_parse_aliases
+             ☐ use this to test above test_lang_prim_word
+          ☐ lang_combi_one_or_more
     ☐ test_combi_zero_or_more_of
     ☐ test_combi_until_first_do_second
     ☐ test_combi_optional

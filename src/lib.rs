@@ -67,7 +67,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub struct Parser {
     input_original: String,
     input_remaining: String,
-    output_aliases: Vec<(ParserFunctionType, ParserFunctionParam)>,
+    language_arena: indextree::Arena<ParserFunctionTypeAndParam>,
+    language_arena_node_parent_id: indextree::NodeId,
     output_arena: indextree::Arena<ParserElement>,
     output_arena_node_parent_id: indextree::NodeId,
     chomp: String,
@@ -140,6 +141,7 @@ impl ParserEl {
 
 #[derive(Clone)]
 pub enum ParserFunctionType {
+    None, //added while creating language_arena - might cause issue if not in match statements?
     TakesParser(ParserFunction), //e.g. primitive except prim_word, element, function
     TakesParserWord(ParserFunctionString), //e.g. prim_word
     TakesParserFn(ParserFunctionParserFunction), //e.g. simple combinator like combi_parser_one_or_more
@@ -159,11 +161,24 @@ pub enum ParserFunctionParam {
 pub type ParserFunction = fn(Parser) -> Parser;
 pub type ParserFunctionString = fn(Parser, &str) -> Parser;
 pub type ParserFunctionParserFunction = fn(Parser, ParserFunction) -> Parser;
+pub type ParserFunctionTypeAndParam = (ParserFunctionType, ParserFunctionParam);
+
+///quick and dirty helper function to Debug function names
+//https://users.rust-lang.org/t/get-the-name-of-the-function-a-function-pointer-points-to/14930
+fn get_parserfn_name(f: fn(Parser) -> Parser) -> &'static str {
+    match f {
+        _ if f == Parser::prim_next => "prim_next",
+        _ => "unknown function name - manually add it to 'get_parserfn_name' to see it here!",
+    }
+}
 
 impl fmt::Debug for ParserFunctionType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            ParserFunctionType::TakesParser(_) => write!(f, "TakesParser"),
+            ParserFunctionType::None => write!(f, "None"),
+            ParserFunctionType::TakesParser(p) => {
+                write!(f, "TakesParser {:?}", get_parserfn_name(p))
+            }
             ParserFunctionType::TakesParserWord(_) => write!(f, "TakesParserWord"),
             ParserFunctionType::TakesParserFn(_) => write!(f, "TakesParserFn"),
         }
@@ -185,17 +200,25 @@ impl fmt::Debug for ParserFunctionParam {
 impl Parser {
     ///Initialises a new parser with the string you wish to parse
     pub fn new(input_string: &str) -> Parser {
-        let mut arena = indextree::Arena::new();
-        let root = ParserElement::new();
-        let root_id = arena.new_node(root);
+        let mut output_arena: indextree::Arena<ParserElement> = indextree::Arena::new();
+        let output_arena_root: ParserElement = ParserElement::new();
+        let output_arena_node_parent_id = output_arena.new_node(output_arena_root);
+
+        let mut language_arena: indextree::Arena<ParserFunctionTypeAndParam> =
+            indextree::Arena::new();
+        let language_root: ParserFunctionTypeAndParam =
+            (ParserFunctionType::None, ParserFunctionParam::None);
+        let language_arena_node_parent_id = language_arena.new_node(language_root);
+
         let new_parser = Parser {
             input_original: input_string.to_string(),
             input_remaining: input_string.to_string(),
             chomp: "".to_string(),
             chomping: true,
-            output_aliases: Vec::<(ParserFunctionType, ParserFunctionParam)>::new(),
-            output_arena: arena,
-            output_arena_node_parent_id: root_id,
+            language_arena,
+            language_arena_node_parent_id,
+            output_arena,
+            output_arena_node_parent_id,
             success: true,
             display_errors: true,
         };
@@ -259,11 +282,38 @@ impl Parser {
         let mut parser_lang: Parser = Parser::new(parser_lang_string);
         while parser_lang.success && parser_lang.input_remaining.len() > 0 {
             parser_lang = parser_lang.lang_one_of_all_lang_parsers();
+            parser_lang
+                .clone()
+                .test_printing_functionTypeAndParam("last child added: ");
         }
 
         //second, parse the input_string using those instructions
         let mut parser: Parser = Parser::new(input_string);
-        for (f, param_option) in parser_lang.output_aliases {
+        let language_arena = &mut parser_lang.clone().language_arena;
+        //let language_arena_current_parent_node_id =
+        //    parser_lang.clone().language_arena_node_parent_id;
+        let list_of_nodes: Vec<&indextree::Node<ParserFunctionTypeAndParam>> = language_arena
+            .iter()
+            //exclude removed items
+            .filter(|n| !n.is_removed())
+            //exclude root item
+            .filter(|n| {
+                let (f, p) = n.get();
+                match (f, p) {
+                    (ParserFunctionType::None, ParserFunctionParam::None) => false,
+                    _ => true,
+                }
+            })
+            .collect();
+
+        for node in list_of_nodes.clone() {
+            let (f, param_option) = node.get();
+            println!(
+                "{:?} {:?} {:?}",
+                list_of_nodes.clone().len(),
+                f,
+                param_option
+            );
             match f {
                 ParserFunctionType::TakesParser(fun) => {
                     parser = fun(parser);
@@ -272,15 +322,12 @@ impl Parser {
                     ParserFunctionParam::String(string) => {
                         parser = fun(parser, string.as_str());
                     }
-                    _ => {
-                        return parser;
-                    }
+                    _ => (),
                 },
-                _ => {
-                    return parser;
-                }
+                _ => (),
             }
         }
+
         parser
     }
 
@@ -338,7 +385,10 @@ impl Parser {
     ///Option...<br/>
     ///Some(index of the found variable within the parser.output, and the variable[ParserElement](struct.ParserElement.html)<br/>
     ///None
-    pub fn arena_find_element_var(mut self: Parser, var_name: &str) -> Option<ParserElement> {
+    pub fn output_arena_find_element_var(
+        mut self: Parser,
+        var_name: &str,
+    ) -> Option<ParserElement> {
         let arena = &mut self.output_arena;
         //there should only be one or zero
         let list_of_nodes_with_var_name: Vec<&indextree::Node<ParserElement>> = arena
@@ -352,17 +402,35 @@ impl Parser {
         }
     }
 
-    pub fn arena_append_element(mut self: Parser, el: ParserElement) -> Parser {
+    pub fn output_arena_append_element(mut self: Parser, el: ParserElement) -> Parser {
         let arena = &mut self.output_arena;
         let new_node = arena.new_node(el);
         self.output_arena_node_parent_id.append(new_node, arena);
         self
     }
 
-    pub fn arena_get_current_parent_element(mut self: Parser) -> Option<ParserElement> {
+    pub fn language_arena_append_functionTypeAndParam(
+        mut self: Parser,
+        fp: ParserFunctionTypeAndParam,
+    ) -> Parser {
+        let arena = &mut self.language_arena;
+        let new_node = arena.new_node(fp);
+        self.language_arena_node_parent_id.append(new_node, arena);
+        self
+    }
+
+    pub fn test_printing_functionTypeAndParam(mut self: Parser, s: &str) {
+        let test_language_arena = &mut self.language_arena;
+        let last_child = self
+            .clone()
+            .language_arena_get_last_child_functionTypeAndParam();
+        println!("####{} {:?}", s, last_child);
+    }
+
+    pub fn output_arena_get_current_parent_element(mut self: Parser) -> Option<ParserElement> {
         let arena = &mut self.output_arena;
-        let current_parent_node_id = self.output_arena_node_parent_id;
-        let parent_option = arena.get(current_parent_node_id);
+        let output_arena_current_parent_node_id = self.output_arena_node_parent_id;
+        let parent_option = arena.get(output_arena_current_parent_node_id);
         match parent_option {
             Some(parent) => Some(parent.get().clone()),
             _ => None,
@@ -370,11 +438,11 @@ impl Parser {
         //parent_option.get()
     }
 
-    pub fn arena_get_last_child_element(mut self: Parser) -> Option<ParserElement> {
+    pub fn output_arena_get_last_child_element(mut self: Parser) -> Option<ParserElement> {
         let arena = &mut self.output_arena;
-        let current_parent_node_id = self.output_arena_node_parent_id;
+        let output_arena_current_parent_node_id = self.output_arena_node_parent_id;
         //get parent node
-        let parent_option = arena.get(current_parent_node_id);
+        let parent_option = arena.get(output_arena_current_parent_node_id);
         match parent_option {
             Some(parent) => {
                 //get last child id
@@ -396,15 +464,45 @@ impl Parser {
         //parent_option.get()
     }
 
-    pub fn arena_get_nth_last_child_element(
+    pub fn language_arena_get_last_child_functionTypeAndParam(
+        mut self: Parser,
+    ) -> Option<ParserFunctionTypeAndParam> {
+        let arena = &mut self.language_arena;
+        let language_arena_current_parent_node_id = self.language_arena_node_parent_id;
+        //get parent node
+        let parent_option = arena.get(language_arena_current_parent_node_id);
+        match parent_option {
+            Some(parent) => {
+                //get last child id
+                let last_child_id_option = parent.last_child();
+                match last_child_id_option {
+                    Some(last_child_id) => {
+                        //get last child node
+                        let child_option = arena.get(last_child_id);
+                        match child_option {
+                            Some(child) => Some(child.get().clone()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+        //parent_option.get()
+    }
+
+    pub fn output_arena_get_nth_last_child_element(
         mut self: Parser,
         index: usize,
     ) -> Option<ParserElement> {
         let arena = &mut self.output_arena;
-        let current_parent_node_id = self.output_arena_node_parent_id;
+        let output_arena_current_parent_node_id = self.output_arena_node_parent_id;
 
         //get node_id
-        let node_id_option = current_parent_node_id.reverse_children(arena).nth(index);
+        let node_id_option = output_arena_current_parent_node_id
+            .reverse_children(arena)
+            .nth(index);
         match node_id_option {
             Some(node_id) => {
                 //get node
@@ -418,12 +516,14 @@ impl Parser {
         }
     }
 
-    pub fn arena_remove_nth_last_child_element(mut self: Parser, index: usize) -> Parser {
+    pub fn output_arena_remove_nth_last_child_element(mut self: Parser, index: usize) -> Parser {
         let arena = &mut self.output_arena;
-        let current_parent_node_id = self.output_arena_node_parent_id;
+        let output_arena_current_parent_node_id = self.output_arena_node_parent_id;
 
         //get node_id
-        let node_id_option = current_parent_node_id.reverse_children(arena).nth(index);
+        let node_id_option = output_arena_current_parent_node_id
+            .reverse_children(arena)
+            .nth(index);
         match node_id_option {
             Some(node_id) => {
                 //remove node
@@ -442,7 +542,7 @@ impl Parser {
         self.combi_first_success_of(
             &[
                 //combinators
-                Parser::lang_combi_one_or_more,
+                //Parser::lang_combi_one_or_more,
                 //primitives
                 Parser::lang_prim_word,
                 Parser::lang_prim_eols_or_eof,
@@ -460,15 +560,13 @@ impl Parser {
     pub fn lang_factory_takes_parser(
         mut self: Parser,
         word: &str,
-        parser_function: ParserFunctionType,
-        parser_parameter: ParserFunctionParam,
+        pf: ParserFunctionTypeAndParam,
         error_text: &str,
     ) -> Parser {
         if self.success {
             self = self.prim_word(word);
             if self.success {
-                self.output_aliases
-                    .push((parser_function, parser_parameter));
+                self = self.language_arena_append_functionTypeAndParam(pf);
                 self
             } else {
                 self.display_error(error_text);
@@ -485,8 +583,10 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ">",
-            ParserFunctionType::TakesParser(Parser::prim_next),
-            ParserFunctionParam::None,
+            (
+                ParserFunctionType::TakesParser(Parser::prim_next),
+                ParserFunctionParam::None,
+            ),
             "lang_prim_next",
         )
     }
@@ -495,8 +595,10 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             "\"",
-            ParserFunctionType::TakesParser(Parser::prim_quote),
-            ParserFunctionParam::None,
+            (
+                ParserFunctionType::TakesParser(Parser::prim_quote),
+                ParserFunctionParam::None,
+            ),
             "lang_prim_quote",
         )
     }
@@ -505,8 +607,10 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             "@",
-            ParserFunctionType::TakesParser(Parser::prim_char),
-            ParserFunctionParam::None,
+            (
+                ParserFunctionType::TakesParser(Parser::prim_char),
+                ParserFunctionParam::None,
+            ),
             "lang_prim_char",
         )
     }
@@ -515,8 +619,10 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             "#",
-            ParserFunctionType::TakesParser(Parser::prim_digit),
-            ParserFunctionParam::None,
+            (
+                ParserFunctionType::TakesParser(Parser::prim_digit),
+                ParserFunctionParam::None,
+            ),
             "lang_prim_digit",
         )
     }
@@ -525,8 +631,10 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ",",
-            ParserFunctionType::TakesParser(Parser::prim_eols),
-            ParserFunctionParam::None,
+            (
+                ParserFunctionType::TakesParser(Parser::prim_eols),
+                ParserFunctionParam::None,
+            ),
             "lang_prim_eols",
         )
     }
@@ -535,8 +643,10 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ".",
-            ParserFunctionType::TakesParser(Parser::prim_eof),
-            ParserFunctionParam::None,
+            (
+                ParserFunctionType::TakesParser(Parser::prim_eof),
+                ParserFunctionParam::None,
+            ),
             "lang_prim_eof",
         )
     }
@@ -545,8 +655,10 @@ impl Parser {
         Parser::lang_factory_takes_parser(
             self,
             ";",
-            ParserFunctionType::TakesParser(Parser::prim_eols_or_eof),
-            ParserFunctionParam::None,
+            (
+                ParserFunctionType::TakesParser(Parser::prim_eols_or_eof),
+                ParserFunctionParam::None,
+            ),
             "lang_prim_eols_or_eof",
         )
     }
@@ -560,10 +672,11 @@ impl Parser {
             );
             self.display_errors = display_errors_previous_flag_setting;
             if self.success {
-                self.output_aliases.push((
+                let fp = (
                     ParserFunctionType::TakesParserWord(Parser::prim_word),
                     ParserFunctionParam::String(self.clone().chomp),
-                ));
+                );
+                self = self.language_arena_append_functionTypeAndParam(fp);
                 self = self.chomp_clear();
                 self
             } else {
@@ -595,12 +708,13 @@ impl Parser {
                 //Have to call the parser on that string
                 //But it's getting a bit manual - need to look at a more nested AST approach?
 
-                self.output_aliases.push((
+                //TODO replace with output_arena_append_element
+                /*self.language_arena.push((
                     ParserFunctionType::TakesParserFn(Parser::combi_one_or_more_of),
                     ParserFunctionParam::ParserFn(Parser::get_parser_function_by_name(
                         self.clone().chomp,
                     )),
-                ));
+                ));*/
                 self = self.chomp_clear();
                 self
             } else {
@@ -929,7 +1043,7 @@ impl Parser {
                 let val = self.clone().chomp;
                 el.el_type = Some(ParserElementType::Str);
                 el.string = Some(val);
-                self = self.arena_append_element(el);
+                self = self.output_arena_append_element(el);
                 self = self.chomp_clear();
                 self
             } else {
@@ -955,7 +1069,7 @@ impl Parser {
                 let val = self.clone().chomp.parse().unwrap();
                 el.el_type = Some(ParserElementType::Int64);
                 el.int64 = Some(val);
-                self = self.arena_append_element(el);
+                self = self.output_arena_append_element(el);
                 self = self.chomp_clear();
                 self
             } else {
@@ -983,7 +1097,7 @@ impl Parser {
                 let val = self.clone().chomp.parse().unwrap();
                 el.el_type = Some(ParserElementType::Float64);
                 el.float64 = Some(val);
-                self = self.arena_append_element(el);
+                self = self.output_arena_append_element(el);
                 self = self.chomp_clear();
                 self
             } else {
@@ -1006,7 +1120,7 @@ impl Parser {
             let el_var = chomp[..(chomp.len() - 1)].to_string();
             el.el_type = Some(ParserElementType::Var);
             el.var_name = Some(el_var);
-            self = self.arena_append_element(el);
+            self = self.output_arena_append_element(el);
             //println!("{:?}", el);
             self = self.chomp_clear();
             self.display_errors = display_errors_previous_flag_setting;
@@ -1039,18 +1153,18 @@ impl Parser {
             .prim_eols_or_eof();
         if temp_self.success {
             //get the previously parsed variable name, and variable value
-            let variable_el_option = temp_self.clone().arena_get_nth_last_child_element(1);
-            let value_el_option = temp_self.clone().arena_get_nth_last_child_element(0);
+            let variable_el_option = temp_self.clone().output_arena_get_nth_last_child_element(1);
+            let value_el_option = temp_self.clone().output_arena_get_nth_last_child_element(0);
             //combine them into one element
             match (variable_el_option, value_el_option) {
                 (Some(variable_el), Some(mut value_el)) => {
                     value_el.el_type = Some(ParserElementType::Var);
                     value_el.var_name = variable_el.var_name;
                     //remove those two last elements, and replace them with the combined element
-                    temp_self = temp_self.arena_remove_nth_last_child_element(0);
-                    temp_self = temp_self.arena_remove_nth_last_child_element(0);
+                    temp_self = temp_self.output_arena_remove_nth_last_child_element(0);
+                    temp_self = temp_self.output_arena_remove_nth_last_child_element(0);
                     //add combined element back into arena
-                    temp_self = temp_self.arena_append_element(value_el);
+                    temp_self = temp_self.output_arena_append_element(value_el);
                     temp_self = temp_self.chomp_clear();
                     temp_self
                 }
@@ -1107,8 +1221,8 @@ impl Parser {
 
         let mut el = ParserElement::new();
         //check both values exist
-        let variable2_el_option = self.clone().arena_get_nth_last_child_element(0);
-        let variable1_el_option = self.clone().arena_get_nth_last_child_element(1);
+        let variable2_el_option = self.clone().output_arena_get_nth_last_child_element(0);
+        let variable1_el_option = self.clone().output_arena_get_nth_last_child_element(1);
         match (variable1_el_option, variable2_el_option) {
             (Some(variable1_el), Some(variable2_el)) => {
                 //check both values have the same element type
@@ -1160,10 +1274,10 @@ impl Parser {
                             }
 
                             //remove the last 2 value elements
-                            self = self.arena_remove_nth_last_child_element(0);
-                            self = self.arena_remove_nth_last_child_element(0);
+                            self = self.output_arena_remove_nth_last_child_element(0);
+                            self = self.output_arena_remove_nth_last_child_element(0);
                             //add combined (sum) element back into arena
-                            self = self.arena_append_element(el);
+                            self = self.output_arena_append_element(el);
                             self = self.chomp_clear();
                             self
                         } else {
@@ -1219,8 +1333,8 @@ mod tests {
         let language_string = "1+a";
         let result = Parser::new_and_parse_aliases(input_str, language_string);
         assert_eq!(result.input_original, input_str);
-        //assert_eq!(result.input_remaining, "");
-        //assert_eq!(result.chomp, "aaaa");
+        assert_eq!(result.input_remaining, "");
+        assert_eq!(result.chomp, "aaaa");
         assert_eq!(result.success, true);
     }
 
@@ -1230,7 +1344,7 @@ mod tests {
         let language_string = "'test'";
         let result = Parser::new_and_parse_aliases(input_str, language_string);
         assert_eq!(result.input_original, input_str);
-        assert_eq!(result.input_remaining, "");
+        //assert_eq!(result.input_remaining, "");
         assert_eq!(result.chomp, "test");
         assert_eq!(result.success, true);
     }
@@ -1331,7 +1445,7 @@ mod tests {
         assert_eq!(result.input_original, input_str);
         assert_eq!(result.input_remaining, "");
         assert_eq!(result.output_arena.count(), 2);
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Str));
@@ -1414,7 +1528,7 @@ mod tests {
                 .count(),
             2
         );
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1444,7 +1558,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1461,7 +1575,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1478,7 +1592,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1495,7 +1609,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1512,7 +1626,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1529,7 +1643,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1546,7 +1660,7 @@ mod tests {
         let result = parser.clone().fn_var_sum();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1566,7 +1680,7 @@ mod tests {
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
 
-        let mut el_option = result.clone().arena_get_nth_last_child_element(2);
+        let mut el_option = result.clone().output_arena_get_nth_last_child_element(2);
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1576,7 +1690,7 @@ mod tests {
             _ => assert!(true, false),
         }
 
-        el_option = result.clone().arena_get_nth_last_child_element(1);
+        el_option = result.clone().output_arena_get_nth_last_child_element(1);
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1586,7 +1700,7 @@ mod tests {
             _ => assert!(true, false),
         }
 
-        el_option = result.clone().arena_get_nth_last_child_element(0);
+        el_option = result.clone().output_arena_get_nth_last_child_element(0);
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1604,7 +1718,7 @@ mod tests {
         let result = parser.clone().parse();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1632,7 +1746,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1650,7 +1764,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1668,7 +1782,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1686,7 +1800,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1703,7 +1817,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1720,7 +1834,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1737,7 +1851,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1754,7 +1868,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1771,7 +1885,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1788,7 +1902,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1805,7 +1919,7 @@ mod tests {
         result = Parser::new_and_parse(input_string, Parser::fn_var_assign);
         assert_eq!(result.input_original, input_string);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1835,7 +1949,7 @@ mod tests {
         let result = parser.clone().el_var();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "= 1");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1852,7 +1966,7 @@ mod tests {
         let result = parser.clone().el_var();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "= 123.45");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Var));
@@ -1880,7 +1994,7 @@ mod tests {
         let result = parser.clone().el_float();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1897,7 +2011,7 @@ mod tests {
         let result = parser.clone().el_float();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1914,7 +2028,7 @@ mod tests {
         let result = parser.clone().el_float();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Float64));
@@ -1943,7 +2057,7 @@ mod tests {
         let result = parser.clone().el_int();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1960,7 +2074,7 @@ mod tests {
         let result = parser.clone().el_int();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
@@ -1977,7 +2091,7 @@ mod tests {
         let result = parser.clone().el_int();
         assert_eq!(result.input_original, parser.input_original);
         assert_eq!(result.input_remaining, "");
-        let el_option = result.clone().arena_get_last_child_element();
+        let el_option = result.clone().output_arena_get_last_child_element();
         match el_option {
             Some(el) => {
                 assert_eq!(el.el_type, Some(ParserElementType::Int64));
